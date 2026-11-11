@@ -1,0 +1,4 @@
+cat
+house
+tree
+ice cream

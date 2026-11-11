@@ -1,0 +1,22 @@
+# Build artifacts
+build/
+*.o
+*.so
+*.a
+
+# Coverage & profiling
+*.gcno
+*.gcda
+*.gcov
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Runtime & test output
+results/
+users.dat
+*.log
