@@ -129,6 +129,7 @@ Chỉ làm đúng phạm vi task. Phát hiện việc khác cần sửa thì ghi
 ## 11. Git và commit
 
 - **Không tự chạy `git commit`, `git push`, `git rebase`, `git reset --hard`, hay sửa lịch sử.** Tôi tự commit để đảm bảo yêu cầu: mỗi tuần tối thiểu 5 commit, mỗi commit cách nhau tối thiểu 30 phút.
+- **Tuyệt đối không đưa thư mục `docs/` và file `AGENTS.md` vào các commit code (nhánh `main` và các nhánh tính năng).** Các tài liệu thiết kế và quy ước được lưu trữ riêng tại nhánh `future/docs-design-rule` (sẽ được xóa khi dự án hoàn thành) và được giữ cục bộ trên máy để tra cứu, đã cấu hình loại trừ qua `.git/info/exclude`. Mọi đề xuất commit cho nhánh code chỉ gồm mã nguồn, build script, test và CI.
 - Cuối mỗi bước nhỏ, **đề xuất** nội dung commit message theo dạng `type(scope): mô tả`, ví dụ `feat(room): add join_room`, `test(auth): cover wrong password`. Các type: `feat`, `fix`, `test`, `docs`, `refactor`, `chore`.
 - Mỗi bước nhỏ nên tách thành một commit riêng (code + test của nó), để lịch sử rõ ràng.
 
@@ -141,6 +142,7 @@ Chỉ làm đúng phạm vi task. Phát hiện việc khác cần sửa thì ghi
 - Không hạ ngưỡng coverage, không tắt cảnh báo trình biên dịch.
 - Không thay đổi `protocol.md` một cách âm thầm.
 - Không bịa kết quả: nếu chưa chạy được lệnh hoặc không chắc chắn, hãy nói rõ.
+- Không commit tài liệu trong `docs/` hoặc file `AGENTS.md` vào nhánh phát triển (`main`, nhánh tính năng).
 
 ## 13. Khi không chắc chắn
 

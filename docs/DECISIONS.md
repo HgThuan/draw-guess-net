@@ -50,6 +50,7 @@
 | D-022 | Quy trình agent: không tự commit | Chấp nhận |
 | D-023 | Đóng băng tính năng ngày 14/12, tính năng tùy chọn để sau | Chấp nhận |
 | D-024 | Chốt công cụ kiểm thử và báo cáo: cmocka, gcovr, pytest, matplotlib | Chấp nhận |
+| D-025 | Quản lý tài liệu thiết kế và quy ước ở nhánh riêng, không commit vào nhánh code | Chấp nhận |
 
 ---
 
@@ -222,6 +223,13 @@
 - **Quyết định:** Chọn `cmocka` cho unit test C, `gcovr` cho báo cáo và kiểm tra ngưỡng coverage, `pytest` cho integration test, `matplotlib` để vẽ biểu đồ kết quả tải cho báo cáo.
 - **Phương án đã cân nhắc:** Unity (ít tiện ích setup/teardown hơn cmocka); `lcov` (cần thêm bước chuyển đổi, trong khi `gcovr` vừa in tóm tắt vừa kiểm tra `--fail-under-line` vừa xuất HTML/XML).
 - **Hệ quả:** Thống nhất một bộ công cụ duy nhất trong `Makefile` và CI. `pytest` và `matplotlib` chỉ phục vụ kiểm thử và báo cáo, không nằm trong sản phẩm chạy.
+
+### D-025: Quản lý tài liệu thiết kế và quy ước ở nhánh riêng, không commit vào nhánh code
+- **Ngày:** 12/11/2026    **Trạng thái:** Chấp nhận
+- **Bối cảnh:** Thư mục `docs/` và file `AGENTS.md` chứa tài liệu hướng dẫn và theo dõi tiến độ của đồ án, không phải mã nguồn chạy hay giao diện người dùng. Cần tách biệt để nhánh code (`main`) sạch sẽ và chỉ chứa sản phẩm bàn giao kỹ thuật.
+- **Quyết định:** Toàn bộ tài liệu `docs/` và `AGENTS.md` được lưu trữ riêng biệt tại nhánh `future/docs-design-rule` (sẽ được xóa khi dự án hoàn thành). Trên nhánh `main` và các nhánh phát triển, cấu hình loại trừ qua `.git/info/exclude`. Mọi commit trên nhánh code tuyệt đối không được chứa `docs/` hay `AGENTS.md`.
+- **Phương án đã cân nhắc:** Commit `docs/` chung vào `main` (làm loãng lịch sử commit mã nguồn).
+- **Hệ quả:** Nhánh `main` giữ đúng cấu trúc nộp bài sạch sẽ, tài liệu vẫn được lưu trữ trên Git ở nhánh riêng và giữ cục bộ trên máy để tra cứu.
 
 ---
 

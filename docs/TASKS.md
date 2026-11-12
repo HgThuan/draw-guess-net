@@ -17,7 +17,7 @@
 
 | Mục | Giá trị |
 |---|---|
-| Task đang làm | **T-002** (target `coverage`, `asan` trong `Makefile`) |
+| Task đang làm | **T-004** (`common/framing`: bộ đệm ghép dòng) |
 | Việc chặn | (không) |
 | Tuần | 1 (11/11 đến 16/11) |
 
@@ -66,8 +66,8 @@ Tuần tính theo `TESTING.md` mục 12. **Đóng băng tính năng 14/12**, h�
 | Mã | Task | File chính | Tiêu chí riêng | Phụ thuộc | Trạng thái |
 |---|---|---|---|---|---|
 | T-001 | Khung thư mục, `Makefile` (`all`, `test`, `clean`), `.gitignore` | `Makefile`, cây thư mục theo `ARCHITECTURE.md` mục 3 | `make` và `make test` chạy được với một test cmocka mẫu | B-1, B-3, B-4 | DONE (11/11) |
-| T-002 | Target `coverage`, `asan` trong `Makefile` | `Makefile` | Ba bản build tách thư mục `build/`, `build/cov/`, `build/asan/` với cờ đúng `TECKSTACK.md` mục 3; `gcovr` in tóm tắt (chưa chặn) | T-001 | TODO |
-| T-003 | CI GitHub Actions: build, `grep` quy ước, unit, coverage (chỉ báo cáo), asan | `.github/workflows/ci.yml` | Workflow xanh trên lần push đầu. Bước `grep` báo lỗi nếu module logic chứa `sys/socket.h`, `unistd.h`, `sys/epoll.h` hoặc có `gets`, `sprintf`, `strcpy` | T-002 | TODO |
+| T-002 | Target `coverage`, `asan` trong `Makefile` | `Makefile` | Ba bản build tách thư mục `build/`, `build/cov/`, `build/asan/` với cờ đúng `TECKSTACK.md` mục 3; `gcovr` in tóm tắt (chưa chặn) | T-001 | DONE (12/11) |
+| T-003 | CI GitHub Actions: build, `grep` quy ước, unit, coverage (chỉ báo cáo), asan | `.github/workflows/ci.yml` | Workflow xanh trên lần push đầu. Bước `grep` báo lỗi nếu module logic chứa `sys/socket.h`, `unistd.h`, `sys/epoll.h` hoặc có `gets`, `sprintf`, `strcpy` | T-002 | DONE (12/11) |
 | T-004 | `common/framing`: bộ đệm ghép dòng | `common/framing.[ch]`, `tests/unit/test_framing.c` | Đủ các trường hợp ở `TESTING.md` mục 6 hàng `framing` (cắt đôi, dính nhiều dòng, 512 và 513 byte, `\r\n`, dòng rỗng, từng byte); RB-07 phần framing | T-001 | TODO |
 | T-005 | `common/protocol`: parse dòng thành `Command`, bảng mã lỗi, hàm định dạng `OK`/`ERR` | `common/protocol.[ch]`, `tests/unit/test_protocol.c` | Tách đúng mọi lệnh ở `protocol.md` mục 6 (số tham số, trường văn bản tự do chứa `\|`); `103`, `100`; kiểm tra số nguyên; RB-07 phần parse | T-004 | TODO |
 | T-006 | `clock`, `rng` (thật và giả), `conn` cơ bản (bảng slot, `ConnId` có thế hệ, `out` và danh sách `dirty`) | `server/src/{clock,rng,conn}.[ch]`, test tương ứng | `ConnId` cũ không hợp lệ sau khi tái dùng slot; `out` đầy thì báo; đồng hồ giả điều khiển được | T-001 | TODO |
@@ -175,3 +175,5 @@ Theo `AGENTS.md` mục 9, cắt từ trên xuống:
 |---|---|---|---|
 | 11/11/2026 | (tài liệu) | `docs: initialize project docs, decisions, and tech stack` | `AGENTS.md`, `README.md`, `docs/*` |
 | 11/11/2026 | T-001 | `chore(build): add project directory skeleton, Makefile, and initial cmocka test` | `make` và `make test` xanh |
+| 12/11/2026 | T-002, T-003 | `ci(build): add coverage, asan targets and GitHub Actions workflow` | `make coverage`, `make asan` và CI workflow |
+| 12/11/2026 | (tài liệu) | `docs(rules): enforce no-docs commit rule on code branches (D-025)` | `AGENTS.md`, `DECISIONS.md`, `TASKS.md` |
