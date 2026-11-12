@@ -8,6 +8,7 @@
 
 int run_framing_tests(void);
 int run_protocol_tests(void);
+int run_conn_tests(void);
 
 static void test_sanity_check(void **state)
 {
@@ -29,5 +30,6 @@ int main(void)
     rc |= cmocka_run_group_tests_name("sanity", sanity_tests, NULL, NULL);
     rc |= run_framing_tests();
     rc |= run_protocol_tests();
+    rc |= run_conn_tests();
     return rc;
 }
