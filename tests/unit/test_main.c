@@ -9,9 +9,12 @@
 
 static void test_sanity_check(void **state)
 {
+    char buf[16];
     (void)state;
     assert_null(ns_connect("127.0.0.1", 9000));
     assert_int_equal(ns_send_line(NULL, "PING"), -1);
+    assert_int_equal(ns_recv_line(NULL, buf, sizeof(buf), 0), -1);
+    ns_close(NULL);
 }
 
 int main(void)

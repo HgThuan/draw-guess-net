@@ -1,0 +1,59 @@
+name: netsketch CI
+
+on:
+  push:
+    branches: [ "main", "future/**" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libcmocka-dev gcovr valgrind \
+                                  python3 python3-tk python3-pytest
+
+      - name: Build server and client library
+        run: |
+          make clean
+          make
+
+      - name: Check architecture and security conventions
+        run: |
+          if grep -rnE "\b(gets|sprintf|strcpy)\b" common/ server/src/ client/libnetsketch/; then
+            echo "ERROR: Forbidden unsafe C function (gets, sprintf, strcpy) found."
+            exit 1
+          fi
+          LOGIC_PATHS="common server/src/auth.c server/src/auth.h server/src/session.c server/src/session.h server/src/room.c server/src/room.h server/src/game.c server/src/game.h server/src/scoring.c server/src/scoring.h server/src/chat.c server/src/chat.h server/src/words.c server/src/words.h server/src/dispatch.c server/src/dispatch.h"
+          for p in $LOGIC_PATHS; do
+            if [ -e "$p" ]; then
+              if grep -rnE "<(sys/socket|sys/epoll|unistd)\.h>" "$p"; then
+                echo "ERROR: Pure logic module $p includes forbidden I/O header."
+                exit 1
+              fi
+            fi
+          done
+
+      - name: Run unit tests (cmocka)
+        run: make test
+
+      - name: Run AddressSanitizer + UBSan
+        run: make asan
+
+      - name: Measure code coverage (gcovr)
+        run: make coverage
+
+      - name: Upload coverage HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build/coverage/
+          if-no-files-found: ignore
