@@ -1,6 +1,8 @@
 #ifndef NETSKETCH_CONFIG_H
 #define NETSKETCH_CONFIG_H
 
+#include <stdbool.h>
+
 #define MAX_CLIENTS   2048
 #define MAX_ROOMS     512
 #define MAX_PLAYERS   8
@@ -16,5 +18,19 @@
 #define DEFAULT_TURN_PAUSE   5
 #define DEFAULT_TIME_TICK    5
 #define DEFAULT_IDLE_TIMEOUT 120
+
+typedef struct {
+    int         port;
+    const char *data_dir;
+    const char *words_path;
+    int         choose_time_s;
+    int         turn_pause_s;
+    int         idle_timeout_s;
+    int         max_clients;
+    bool        verbose;
+} Config;
+
+void config_init_defaults(Config *cfg);
+bool config_parse_args(Config *cfg, int argc, char **argv);
 
 #endif
