@@ -17,7 +17,7 @@
 
 | Mục | Giá trị |
 |---|---|
-| Task đang làm | **T-005** (`common/protocol`: parse lệnh, mã lỗi, định dạng phản hồi) |
+| Task đang làm | **T-006** (`clock`, `rng`, `conn` cơ bản) |
 | Việc chặn | (không) |
 | Tuần | 1 (11/11 đến 16/11) |
 
@@ -69,7 +69,7 @@ Tuần tính theo `TESTING.md` mục 12. **Đóng băng tính năng 14/12**, h�
 | T-002 | Target `coverage`, `asan` trong `Makefile` | `Makefile` | Ba bản build tách thư mục `build/`, `build/cov/`, `build/asan/` với cờ đúng `TECKSTACK.md` mục 3; `gcovr` in tóm tắt (chưa chặn) | T-001 | DONE (12/11) |
 | T-003 | CI GitHub Actions: build, `grep` quy ước, unit, coverage (chỉ báo cáo), asan | `.github/workflows/ci.yml` | Workflow xanh trên lần push đầu. Bước `grep` báo lỗi nếu module logic chứa `sys/socket.h`, `unistd.h`, `sys/epoll.h` hoặc có `gets`, `sprintf`, `strcpy` | T-002 | DONE (12/11) |
 | T-004 | `common/framing`: bộ đệm ghép dòng | `common/framing.[ch]`, `tests/unit/test_framing.c` | Đủ các trường hợp ở `TESTING.md` mục 6 hàng `framing` (cắt đôi, dính nhiều dòng, 512 và 513 byte, `\r\n`, dòng rỗng, từng byte); RB-07 phần framing | T-001 | DONE (12/11) |
-| T-005 | `common/protocol`: parse dòng thành `Command`, bảng mã lỗi, hàm định dạng `OK`/`ERR` | `common/protocol.[ch]`, `tests/unit/test_protocol.c` | Tách đúng mọi lệnh ở `protocol.md` mục 6 (số tham số, trường văn bản tự do chứa `\|`); `103`, `100`; kiểm tra số nguyên; RB-07 phần parse | T-004 | TODO |
+| T-005 | `common/protocol`: parse dòng thành `Command`, bảng mã lỗi, hàm định dạng `OK`/`ERR` | `common/protocol.[ch]`, `tests/unit/test_protocol.c` | Tách đúng mọi lệnh ở `protocol.md` mục 6 (số tham số, trường văn bản tự do chứa `\|`); `103`, `100`; kiểm tra số nguyên; RB-07 phần parse | T-004 | DONE (12/11) |
 | T-006 | `clock`, `rng` (thật và giả), `conn` cơ bản (bảng slot, `ConnId` có thế hệ, `out` và danh sách `dirty`) | `server/src/{clock,rng,conn}.[ch]`, test tương ứng | `ConnId` cũ không hợp lệ sau khi tái dùng slot; `out` đầy thì báo; đồng hồ giả điều khiển được | T-001 | TODO |
 | T-007 | `config.h` + đọc tham số dòng lệnh (`--port`, `--data-dir`, `--words`, `--choose-time`, `--turn-pause`, `--idle-timeout`, `--max-clients`, `--verbose`) | `server/src/{config.h,server.[ch],main.c}` | Mặc định đúng `protocol.md` mục 4; tham số sai thì in hướng dẫn và thoát mã khác 0 | T-001 | TODO |
 | T-008 | `net_loop`: `epoll`, `accept`, `recv` -> framing, gửi `HELLO`, gộp ghi, đóng hoãn, tắt an toàn bằng `SIGTERM`/`SIGINT` | `server/src/net_loop.[ch]` | Thử tay `nc localhost 9000` nhận `HELLO\|netsketch\|1`; `SIGTERM` thoát mã 0 | T-004, T-006, T-007 | TODO |
@@ -178,3 +178,4 @@ Theo `AGENTS.md` mục 9, cắt từ trên xuống:
 | 12/11/2026 | T-002, T-003 | `ci(build): add coverage, asan targets and GitHub Actions workflow` | `make coverage`, `make asan` và CI workflow |
 | 12/11/2026 | (tài liệu) | `docs(rules): enforce no-docs commit rule on code branches (D-025)` | `AGENTS.md`, `DECISIONS.md`, `TASKS.md` |
 | 12/11/2026 | T-004 | `feat(framing): implement TCP line framing buffer and unit tests` | 9 unit tests, coverage 97.9% |
+| 12/11/2026 | T-005 | `feat(protocol): add command parser, error codes, and unit tests` | 8 unit tests, coverage 99.3% |
