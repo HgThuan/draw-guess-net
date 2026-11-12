@@ -9,6 +9,7 @@
 int run_framing_tests(void);
 int run_protocol_tests(void);
 int run_conn_tests(void);
+int run_server_tests(void);
 
 static void test_sanity_check(void **state)
 {
@@ -31,5 +32,6 @@ int main(void)
     rc |= run_framing_tests();
     rc |= run_protocol_tests();
     rc |= run_conn_tests();
+    rc |= run_server_tests();
     return rc;
 }
