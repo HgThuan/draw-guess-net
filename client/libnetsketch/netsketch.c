@@ -1,4 +1,3 @@
-/* client/libnetsketch/netsketch.c — Khung thư viện client (cài đặt đầy đủ ở T-307) */
 #include "netsketch.h"
 
 ns_conn *ns_connect(const char *host, int port)

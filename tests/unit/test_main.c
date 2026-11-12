@@ -1,4 +1,3 @@
-/* tests/unit/test_main.c — Điểm chạy toàn bộ unit test với cmocka */
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -6,6 +5,8 @@
 #include <cmocka.h>
 
 #include "netsketch.h"
+
+int run_framing_tests(void);
 
 static void test_sanity_check(void **state)
 {
@@ -19,9 +20,12 @@ static void test_sanity_check(void **state)
 
 int main(void)
 {
-    const struct CMUnitTest tests[] = {
+    const struct CMUnitTest sanity_tests[] = {
         cmocka_unit_test(test_sanity_check),
     };
 
-    return cmocka_run_group_tests(tests, NULL, NULL);
+    int rc = 0;
+    rc |= cmocka_run_group_tests_name("sanity", sanity_tests, NULL, NULL);
+    rc |= run_framing_tests();
+    return rc;
 }
