@@ -26,7 +26,12 @@ SERVER_LOGIC_SRCS := $(filter-out server/src/main.c, $(SERVER_SRCS))
 CLIENT_SRCS       := $(wildcard client/libnetsketch/*.c)
 TEST_SRCS         := $(wildcard tests/unit/*.c)
 
-.PHONY: all test coverage asan clean
+LOGIC_PATHS := common server/src/auth.c server/src/auth.h server/src/session.c server/src/session.h \
+               server/src/room.c server/src/room.h server/src/game.c server/src/game.h \
+               server/src/scoring.c server/src/scoring.h server/src/chat.c server/src/chat.h \
+               server/src/words.c server/src/words.h server/src/dispatch.c server/src/dispatch.h
+
+.PHONY: all test itest check coverage asan clean
 
 all: $(SERVER_BIN) $(CLIENT_LIB)
 
@@ -45,6 +50,19 @@ $(UNIT_BIN): $(COMMON_SRCS) $(SERVER_LOGIC_SRCS) $(CLIENT_SRCS) $(TEST_SRCS) | $
 test: $(UNIT_BIN)
 	./$(UNIT_BIN)
 
+itest: $(SERVER_BIN)
+	pytest -q tests/integration --server $(SERVER_BIN)
+
+check: test itest
+	@if grep -rnE "\b(gets|sprintf|strcpy)\b" common/ server/src/ client/libnetsketch/; then \
+		echo "ERROR: Forbidden unsafe C function found."; exit 1; \
+	fi
+	@for p in $(LOGIC_PATHS); do \
+		if [ -e "$$p" ] && grep -rnE "<(sys/socket|sys/epoll|unistd)\.h>" "$$p"; then \
+			echo "ERROR: Pure logic module $$p includes forbidden I/O header."; exit 1; \
+		fi; \
+	done
+
 $(COV_SERVER_BIN): $(COMMON_SRCS) $(SERVER_SRCS) | $(COV_DIR)
 	$(CC) $(COVFLAGS) $(INCLUDES) $^ -o $@
 
@@ -55,6 +73,7 @@ coverage: | $(COV_DIR) $(COV_HTML_DIR)
 	find $(COV_DIR) -name '*.gcda' -delete
 	$(MAKE) $(COV_SERVER_BIN) $(COV_UNIT_BIN)
 	./$(COV_UNIT_BIN)
+	pytest -q tests/integration --server $(COV_SERVER_BIN)
 	gcovr -r . \
 		--exclude 'tests/.*' \
 		--exclude 'tools/.*' \
@@ -72,6 +91,7 @@ $(ASAN_UNIT_BIN): $(COMMON_SRCS) $(SERVER_LOGIC_SRCS) $(CLIENT_SRCS) $(TEST_SRCS
 
 asan: $(ASAN_SERVER_BIN) $(ASAN_UNIT_BIN)
 	./$(ASAN_UNIT_BIN)
+	pytest -q tests/integration --server $(ASAN_SERVER_BIN)
 
 clean:
 	rm -rf $(BUILD_DIR)

@@ -44,6 +44,9 @@ jobs:
       - name: Run unit tests (cmocka)
         run: make test
 
+      - name: Run integration tests (pytest)
+        run: make itest
+
       - name: Run AddressSanitizer + UBSan
         run: make asan
 
