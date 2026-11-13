@@ -57,6 +57,9 @@ check: test itest
 	@if grep -rnE "\b(gets|sprintf|strcpy)\b" common/ server/src/ client/libnetsketch/; then \
 		echo "ERROR: Forbidden unsafe C function found."; exit 1; \
 	fi
+	@if grep -rnE "\b(D-[0-9]{2,3}|T-[0-9]{3}|IT-[0-9]{2}|RB-[0-9]{2}|LT-[0-9]|protocol\.md|ARCHITECTURE\.md|TESTING\.md|DECISIONS\.md|TASKS\.md|AGENTS\.md)\b" common/ server/ client/ tests/unit/ tests/integration/*.py; then \
+		echo "ERROR: Internal design doc reference found in code/tests."; exit 1; \
+	fi
 	@for p in $(LOGIC_PATHS); do \
 		if [ -e "$$p" ] && grep -rnE "<(sys/socket|sys/epoll|unistd)\.h>" "$$p"; then \
 			echo "ERROR: Pure logic module $$p includes forbidden I/O header."; exit 1; \

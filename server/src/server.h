@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "auth.h"
 #include "config.h"
 #include "clock.h"
 #include "rng.h"
@@ -14,6 +15,7 @@ typedef struct Server {
     Clock     clock;
     Rng       rng;
     Logger    log;
+    UserStore users;
     ConnTable conns;
     bool      stop;
 } Server;
