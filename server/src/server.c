@@ -98,6 +98,8 @@ void server_init(Server *s, const Config *cfg)
     clock_init_real(&s->clock);
     rng_init_real(&s->rng);
     logger_init_file(&s->log, NULL, s->cfg.verbose ? LOG_DEBUG : LOG_INFO);
+    user_store_init(&s->users, s->cfg.data_dir);
+    (void)user_store_load(&s->users);
     conn_table_init(&s->conns, s->cfg.max_clients);
     s->stop = false;
 }

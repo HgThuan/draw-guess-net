@@ -101,7 +101,6 @@ bool conn_send_raw(ConnTable *t, Conn *c, const char *data, size_t len)
         return true;
     }
     if (c->out_len + len > OUT_BUF) {
-        /* Vượt OUT_BUF: coi là client quá chậm và đánh dấu đóng (D-008) */
         c->overflow = true;
         c->closing = true;
         return false;

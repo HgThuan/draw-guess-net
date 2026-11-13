@@ -1,8 +1,8 @@
 import time
 
 
-def test_it02_tcp_line_framing(server):
-    """IT-02: Split a command byte-by-byte and coalesce multiple commands in one packet."""
+def test_tcp_line_framing(server):
+    """Split a command byte-by-byte and coalesce multiple commands in one packet."""
     c = server.connect()
 
     # 1. Send "PING\n" byte-by-byte across multiple TCP writes
@@ -23,8 +23,8 @@ def test_it02_tcp_line_framing(server):
     assert c.recv_line() == "PONG"
 
 
-def test_it08_graceful_shutdown_sigterm(server):
-    """IT-08: Server exits with returncode == 0 on SIGTERM while clients are connected."""
+def test_graceful_shutdown_sigterm(server):
+    """Server exits with returncode == 0 on SIGTERM while clients are connected."""
     clients = [server.connect() for _ in range(3)]
     for c in clients:
         c.send("PING")
