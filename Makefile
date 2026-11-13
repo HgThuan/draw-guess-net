@@ -80,6 +80,7 @@ coverage: | $(COV_DIR) $(COV_HTML_DIR)
 		--exclude 'build/.*' \
 		--exclude 'server/src/main\.c' \
 		--print-summary \
+		--fail-under-line 90 \
 		--html-details $(COV_HTML_DIR)/index.html \
 		--xml $(BUILD_DIR)/coverage.xml
 
