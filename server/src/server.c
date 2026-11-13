@@ -1,4 +1,5 @@
 #include "server.h"
+#include "dispatch.h"
 #include "protocol.h"
 #include <string.h>
 
@@ -102,9 +103,7 @@ void server_init(Server *s, const Config *cfg)
 
 void server_on_line(Server *s, Conn *c, const char *line)
 {
-    (void)s;
-    (void)c;
-    (void)line;
+    dispatch_line(s, c, line);
 }
 
 void server_tick(Server *s, int64_t now_ms)

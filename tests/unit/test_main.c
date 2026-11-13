@@ -11,6 +11,7 @@ int run_protocol_tests(void);
 int run_conn_tests(void);
 int run_server_tests(void);
 int run_net_loop_tests(void);
+int run_dispatch_tests(void);
 
 static void test_sanity_check(void **state)
 {
@@ -35,5 +36,6 @@ int main(void)
     rc |= run_conn_tests();
     rc |= run_server_tests();
     rc |= run_net_loop_tests();
+    rc |= run_dispatch_tests();
     return rc;
 }

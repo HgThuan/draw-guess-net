@@ -136,6 +136,11 @@ static void test_net_loop_framing_too_long_and_reap(void **state)
     assert_true(send(c1, "NG\n\n", 4, 0) == 4);
     assert_int_equal(net_loop_step(&nl, &s_srv, 20), 0);
 
+    memset(buf, 0, sizeof(buf));
+    n = recv(c1, buf, sizeof(buf) - 1, 0);
+    assert_true(n > 0);
+    assert_string_equal(buf, "PONG\n");
+
     memset(buf, 'A', 512);
     buf[512] = '\n';
     assert_true(send(c1, buf, 513, 0) == 513);
@@ -146,6 +151,14 @@ static void test_net_loop_framing_too_long_and_reap(void **state)
     assert_true(n > 0);
     assert_non_null(strstr(buf, "ERR|104|"));
     assert_int_equal(s_srv.conns.active_count, 2);
+
+    /* Connection remains usable after ERR|104 */
+    assert_true(send(c1, "PING\n", 5, 0) == 5);
+    assert_int_equal(net_loop_step(&nl, &s_srv, 20), 0);
+    memset(buf, 0, sizeof(buf));
+    n = recv(c1, buf, sizeof(buf) - 1, 0);
+    assert_true(n > 0);
+    assert_string_equal(buf, "PONG\n");
 
     /* Disconnect c1 and verify reap_closed frees slot 0 */
     close(c1);
