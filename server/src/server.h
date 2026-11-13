@@ -2,6 +2,7 @@
 #define NETSKETCH_SERVER_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "config.h"
 #include "clock.h"
 #include "rng.h"
@@ -16,5 +17,7 @@ typedef struct Server {
 } Server;
 
 void server_init(Server *s, const Config *cfg);
+void server_on_line(Server *s, Conn *c, const char *line);
+void server_tick(Server *s, int64_t now_ms);
 
 #endif

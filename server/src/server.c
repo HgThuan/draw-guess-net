@@ -99,3 +99,16 @@ void server_init(Server *s, const Config *cfg)
     conn_table_init(&s->conns, s->cfg.max_clients);
     s->stop = false;
 }
+
+void server_on_line(Server *s, Conn *c, const char *line)
+{
+    (void)s;
+    (void)c;
+    (void)line;
+}
+
+void server_tick(Server *s, int64_t now_ms)
+{
+    (void)s;
+    (void)now_ms;
+}

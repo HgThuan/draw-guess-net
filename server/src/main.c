@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "net_loop.h"
 #include "server.h"
 
 /* ConnTable holds 2048 Conn slots (~35 MB), so Server must not live on the stack. */
@@ -18,5 +19,5 @@ int main(int argc, char **argv)
     }
 
     server_init(&g_server, &cfg);
-    return 0;
+    return net_loop_run(&g_server);
 }
