@@ -7,11 +7,13 @@
 #include "clock.h"
 #include "rng.h"
 #include "conn.h"
+#include "logger.h"
 
 typedef struct Server {
     Config    cfg;
     Clock     clock;
     Rng       rng;
+    Logger    log;
     ConnTable conns;
     bool      stop;
 } Server;

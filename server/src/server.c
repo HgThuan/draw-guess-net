@@ -97,6 +97,7 @@ void server_init(Server *s, const Config *cfg)
     }
     clock_init_real(&s->clock);
     rng_init_real(&s->rng);
+    logger_init_file(&s->log, NULL, s->cfg.verbose ? LOG_DEBUG : LOG_INFO);
     conn_table_init(&s->conns, s->cfg.max_clients);
     s->stop = false;
 }
@@ -108,6 +109,8 @@ void server_on_line(Server *s, Conn *c, const char *line)
 
 void server_tick(Server *s, int64_t now_ms)
 {
-    (void)s;
-    (void)now_ms;
+    if (!s) {
+        return;
+    }
+    logger_tick(&s->log, now_ms);
 }

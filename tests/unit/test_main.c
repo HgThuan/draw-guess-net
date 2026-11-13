@@ -12,6 +12,8 @@ int run_conn_tests(void);
 int run_server_tests(void);
 int run_net_loop_tests(void);
 int run_dispatch_tests(void);
+int run_sha256_tests(void);
+int run_logger_tests(void);
 
 static void test_sanity_check(void **state)
 {
@@ -37,5 +39,7 @@ int main(void)
     rc |= run_server_tests();
     rc |= run_net_loop_tests();
     rc |= run_dispatch_tests();
+    rc |= run_sha256_tests();
+    rc |= run_logger_tests();
     return rc;
 }
