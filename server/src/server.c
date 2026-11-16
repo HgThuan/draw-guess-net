@@ -101,6 +101,10 @@ void server_init(Server *s, const Config *cfg)
     logger_init_file(&s->log, NULL, s->cfg.verbose ? LOG_DEBUG : LOG_INFO);
     user_store_init(&s->users, s->cfg.data_dir);
     (void)user_store_load(&s->users);
+    words_init(&s->words);
+    if (s->cfg.words_path && s->cfg.words_path[0] != '\0') {
+        (void)words_load(&s->words, s->cfg.words_path);
+    }
     room_table_init(s);
     conn_table_init(&s->conns, s->cfg.max_clients);
     s->stop = false;
