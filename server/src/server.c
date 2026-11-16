@@ -1,6 +1,7 @@
 #include "server.h"
 #include "dispatch.h"
 #include "protocol.h"
+#include "session.h"
 #include <string.h>
 
 void config_init_defaults(Config *cfg)
@@ -114,5 +115,6 @@ void server_tick(Server *s, int64_t now_ms)
     if (!s) {
         return;
     }
+    session_tick(s, now_ms);
     logger_tick(&s->log, now_ms);
 }

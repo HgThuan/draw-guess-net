@@ -2,6 +2,7 @@
 
 #include "net_loop.h"
 #include "protocol.h"
+#include "session.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -96,6 +97,9 @@ static void handle_accept(NetLoop *nl, Server *s, int64_t now_ms)
         Conn *c = conn_alloc(&s->conns, cfd, now_ms);
         if (!c) {
             static const char full_msg[] = "ERR|901|server full\nKICK|SERVER_FULL\n";
+            logger_log(&s->log, LOG_WARN, now_ms,
+                       "sid=- room=- event=KICK reason=SERVER_FULL code=%d",
+                       ERR_SERVER_FULL);
             ssize_t ignored = send(cfd, full_msg, sizeof(full_msg) - 1, MSG_NOSIGNAL);
             (void)ignored;
             close(cfd);
@@ -113,6 +117,8 @@ static void handle_accept(NetLoop *nl, Server *s, int64_t now_ms)
             continue;               /* GCOVR_EXCL_LINE */
         }
 
+        logger_log(&s->log, LOG_INFO, now_ms,
+                   "sid=- room=- event=CONNECT idx=%u", (unsigned)c->idx);
         conn_send_line(&s->conns, c, "HELLO|netsketch|1");
     }
 }
@@ -173,6 +179,14 @@ static void reap_closed(NetLoop *nl, Server *s)
     for (int i = 0; i < s->conns.max_clients; i++) {
         Conn *c = &s->conns.conns[i];
         if (c->state != CONN_FREE && (c->closing || c->overflow)) {
+            if (c->overflow) {
+                logger_log(&s->log, LOG_WARN, clock_now_ms(&s->clock),
+                           "sid=%s room=%d event=SLOW_CLIENT user=%s",
+                           c->session_id[0] ? c->session_id : "-",
+                           c->room_id,
+                           c->user[0] ? c->user : "-");
+            }
+            session_on_disconnect(s, c);
             if (c->fd >= 0) {
                 (void)epoll_ctl(nl->epoll_fd, EPOLL_CTL_DEL, c->fd, NULL);
                 close(c->fd);
@@ -308,6 +322,7 @@ void net_loop_cleanup(NetLoop *nl, Server *s)
         for (int i = 0; i < s->conns.max_clients; i++) {
             Conn *c = &s->conns.conns[i];
             if (c->state != CONN_FREE) {
+                session_on_disconnect(s, c);
                 if (c->fd >= 0) {
                     close(c->fd);
                 }

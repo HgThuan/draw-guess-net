@@ -298,10 +298,16 @@ int auth_verify(UserStore *us, const char *name, const char *pass, User **out_us
 
 void h_register(struct Server *s, Conn *c, const Command *cmd)
 {
+    int64_t now_ms = clock_now_ms(&s->clock);
     int rc = auth_register(&s->users, &s->rng, cmd->argv[0], cmd->argv[1]);
     if (rc == ERR_OK) {
+        logger_log(&s->log, LOG_INFO, now_ms,
+                   "sid=- room=- event=REGISTER user=%s", cmd->argv[0]);
         reply_ok(s, c, NULL);
     } else {
+        logger_log(&s->log, LOG_INFO, now_ms,
+                   "sid=- room=- event=REGISTER_FAIL user=%s code=%d",
+                   cmd->argv[0], rc);
         reply_err(s, c, rc);
     }
 }
