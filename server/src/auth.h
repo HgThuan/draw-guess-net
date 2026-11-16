@@ -5,8 +5,11 @@
 #include <stdint.h>
 #include "config.h"
 #include "conn.h"
+#include "protocol.h"
 #include "rng.h"
 #include "sha256.h"
+
+struct Server;
 
 #define USER_STORE_CAP 4096
 
@@ -33,5 +36,6 @@ User *user_store_find(UserStore *us, const char *name);
 
 int   auth_register(UserStore *us, Rng *rng, const char *name, const char *pass);
 int   auth_verify(UserStore *us, const char *name, const char *pass, User **out_user);
+void  h_register(struct Server *s, Conn *c, const Command *cmd);
 
 #endif

@@ -1,4 +1,5 @@
 #include "dispatch.h"
+#include "auth.h"
 #include <stddef.h>
 
 static void h_ping(Server *s, Conn *c, const Command *cmd)
@@ -8,9 +9,9 @@ static void h_ping(Server *s, Conn *c, const Command *cmd)
 }
 
 static const CmdSpec CMD_SPECS[] = {
-    { CMD_PING,        AUTH_ANY,        ROOM_ANY,      h_ping },
-    { CMD_REGISTER,    AUTH_GUEST_ONLY, ROOM_ANY,      NULL   },
-    { CMD_LOGIN,       AUTH_GUEST_ONLY, ROOM_ANY,      NULL   },
+    { CMD_PING,        AUTH_ANY,        ROOM_ANY,      h_ping     },
+    { CMD_REGISTER,    AUTH_GUEST_ONLY, ROOM_ANY,      h_register },
+    { CMD_LOGIN,       AUTH_GUEST_ONLY, ROOM_ANY,      NULL       },
     { CMD_LOGOUT,      AUTH_REQUIRED,   ROOM_ANY,      NULL   },
     { CMD_CREATE_ROOM, AUTH_REQUIRED,   ROOM_OUT_ONLY, NULL   },
     { CMD_LIST_ROOMS,  AUTH_REQUIRED,   ROOM_ANY,      NULL   },
