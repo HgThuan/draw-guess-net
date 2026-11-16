@@ -101,6 +101,7 @@ void server_init(Server *s, const Config *cfg)
     logger_init_file(&s->log, NULL, s->cfg.verbose ? LOG_DEBUG : LOG_INFO);
     user_store_init(&s->users, s->cfg.data_dir);
     (void)user_store_load(&s->users);
+    room_table_init(s);
     conn_table_init(&s->conns, s->cfg.max_clients);
     s->stop = false;
 }

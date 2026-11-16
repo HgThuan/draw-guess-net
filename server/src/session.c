@@ -2,6 +2,7 @@
 #include "auth.h"
 #include "dispatch.h"
 #include "logger.h"
+#include "room.h"
 #include "server.h"
 #include <string.h>
 
@@ -72,6 +73,10 @@ void h_logout(struct Server *s, Conn *c, const Command *cmd)
     (void)cmd;
     int64_t now_ms = clock_now_ms(&s->clock);
 
+    if (c->room_id >= 0) {
+        room_leave(s, c, "LEAVE");
+    }
+
     logger_log(&s->log, LOG_INFO, now_ms,
                "sid=%s room=%d event=LOGOUT user=%s",
                c->session_id[0] ? c->session_id : "-",
@@ -91,6 +96,10 @@ void session_on_disconnect(struct Server *s, Conn *c)
 {
     if (!s || !c || c->state == CONN_FREE) {
         return;
+    }
+
+    if (c->room_id >= 0) {
+        room_leave(s, c, "DISCONNECT");
     }
 
     int64_t now_ms = clock_now_ms(&s->clock);
@@ -117,6 +126,9 @@ void session_tick(struct Server *s, int64_t now_ms)
         Conn *c = &s->conns.conns[i];
         if (c->state != CONN_FREE && !c->closing) {
             if (now_ms - c->last_active_ms >= timeout_ms) {
+                if (c->room_id >= 0) {
+                    room_leave(s, c, "KICK");
+                }
                 logger_log(&s->log, LOG_INFO, now_ms,
                            "sid=%s room=%d event=KICK reason=IDLE user=%s",
                            c->session_id[0] ? c->session_id : "-",
