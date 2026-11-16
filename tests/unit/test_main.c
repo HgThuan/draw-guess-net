@@ -17,12 +17,13 @@ int run_logger_tests(void);
 int run_auth_tests(void);
 int run_session_tests(void);
 int run_room_tests(void);
+int run_client_lib_tests(void);
 
 static void test_sanity_check(void **state)
 {
     char buf[16];
     (void)state;
-    assert_null(ns_connect("127.0.0.1", 9000));
+    assert_null(ns_connect("127.0.0.1", 1));
     assert_int_equal(ns_send_line(NULL, "PING"), -1);
     assert_int_equal(ns_recv_line(NULL, buf, sizeof(buf), 0), -1);
     ns_close(NULL);
@@ -47,5 +48,6 @@ int main(void)
     rc |= run_auth_tests();
     rc |= run_session_tests();
     rc |= run_room_tests();
+    rc |= run_client_lib_tests();
     return rc;
 }

@@ -11,21 +11,21 @@ static void h_ping(Server *s, Conn *c, const Command *cmd)
 }
 
 static const CmdSpec CMD_SPECS[] = {
-    { CMD_PING,        AUTH_ANY,        ROOM_ANY,      h_ping        },
-    { CMD_REGISTER,    AUTH_GUEST_ONLY, ROOM_ANY,      h_register    },
-    { CMD_LOGIN,       AUTH_GUEST_ONLY, ROOM_ANY,      h_login       },
-    { CMD_LOGOUT,      AUTH_REQUIRED,   ROOM_ANY,      h_logout      },
-    { CMD_CREATE_ROOM, AUTH_REQUIRED,   ROOM_OUT_ONLY, h_create_room },
-    { CMD_LIST_ROOMS,  AUTH_REQUIRED,   ROOM_ANY,      h_list_rooms  },
-    { CMD_JOIN_ROOM,   AUTH_REQUIRED,   ROOM_OUT_ONLY, h_join_room   },
-    { CMD_LEAVE_ROOM,  AUTH_REQUIRED,   ROOM_IN_ONLY,  h_leave_room  },
-    { CMD_START,       AUTH_REQUIRED,   ROOM_IN_ONLY,  NULL   },
-    { CMD_SCOREBOARD,  AUTH_REQUIRED,   ROOM_IN_ONLY,  NULL   },
-    { CMD_CHOOSE_WORD, AUTH_REQUIRED,   ROOM_IN_ONLY,  NULL   },
-    { CMD_STROKE,      AUTH_REQUIRED,   ROOM_IN_ONLY,  NULL   },
-    { CMD_CLEAR,       AUTH_REQUIRED,   ROOM_IN_ONLY,  NULL   },
-    { CMD_GUESS,       AUTH_REQUIRED,   ROOM_IN_ONLY,  NULL   },
-    { CMD_CHAT,        AUTH_REQUIRED,   ROOM_IN_ONLY,  NULL   },
+    { CMD_PING,        AUTH_ANY,        ROOM_ANY,      RSTATE_NONE,     h_ping        },
+    { CMD_REGISTER,    AUTH_GUEST_ONLY, ROOM_ANY,      RSTATE_NONE,     h_register    },
+    { CMD_LOGIN,       AUTH_GUEST_ONLY, ROOM_ANY,      RSTATE_NONE,     h_login       },
+    { CMD_LOGOUT,      AUTH_REQUIRED,   ROOM_ANY,      RSTATE_NONE,     h_logout      },
+    { CMD_CREATE_ROOM, AUTH_REQUIRED,   ROOM_OUT_ONLY, RSTATE_NONE,     h_create_room },
+    { CMD_LIST_ROOMS,  AUTH_REQUIRED,   ROOM_ANY,      RSTATE_NONE,     h_list_rooms  },
+    { CMD_JOIN_ROOM,   AUTH_REQUIRED,   ROOM_OUT_ONLY, RSTATE_NONE,     h_join_room   },
+    { CMD_LEAVE_ROOM,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      h_leave_room  },
+    { CMD_START,       AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_LOBBY,    NULL          },
+    { CMD_SCOREBOARD,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      NULL          },
+    { CMD_CHOOSE_WORD, AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_CHOOSING, NULL          },
+    { CMD_STROKE,      AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  NULL          },
+    { CMD_CLEAR,       AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  NULL          },
+    { CMD_GUESS,       AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  NULL          },
+    { CMD_CHAT,        AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      NULL          },
 };
 
 void reply_ok(Server *s, Conn *c, const char *payload)
@@ -101,13 +101,20 @@ void dispatch_line(Server *s, Conn *c, const char *line)
         return;
     }
 
-    if (spec->room_req == ROOM_IN_ONLY && c->room_id < 0) {
-        reply_err(s, c, ERR_NOT_IN_ROOM);
-        return;
-    }
     if (spec->room_req == ROOM_OUT_ONLY && c->room_id >= 0) {
         reply_err(s, c, ERR_ALREADY_IN_ROOM);
         return;
+    }
+    if (spec->room_req == ROOM_IN_ONLY) {
+        Room *r = room_find(s, c->room_id);
+        if (!r) {
+            reply_err(s, c, ERR_NOT_IN_ROOM);
+            return;
+        }
+        if ((spec->room_states & (1u << r->state)) == 0u) {
+            reply_err(s, c, ERR_WRONG_STATE);
+            return;
+        }
     }
 
     if (!spec->handler) {

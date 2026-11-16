@@ -1,8 +1,17 @@
 #ifndef NETSKETCH_DISPATCH_H
 #define NETSKETCH_DISPATCH_H
 
+#include <stdint.h>
 #include "protocol.h"
+#include "room.h"
 #include "server.h"
+
+#define RSTATE_NONE     0u
+#define RSTATE_LOBBY    (1u << ROOM_LOBBY)
+#define RSTATE_CHOOSING (1u << ROOM_CHOOSING)
+#define RSTATE_DRAWING  (1u << ROOM_DRAWING)
+#define RSTATE_TURN_END (1u << ROOM_TURN_END)
+#define RSTATE_ANY      (RSTATE_LOBBY | RSTATE_CHOOSING | RSTATE_DRAWING | RSTATE_TURN_END)
 
 typedef enum {
     AUTH_ANY = 0,
@@ -22,6 +31,7 @@ typedef struct {
     CmdType    type;
     AuthReq    auth_req;
     RoomReq    room_req;
+    uint32_t   room_states;
     CmdHandler handler;
 } CmdSpec;
 
