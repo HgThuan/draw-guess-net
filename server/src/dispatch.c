@@ -1,5 +1,6 @@
 #include "dispatch.h"
 #include "auth.h"
+#include "session.h"
 #include <stddef.h>
 
 static void h_ping(Server *s, Conn *c, const Command *cmd)
@@ -11,8 +12,8 @@ static void h_ping(Server *s, Conn *c, const Command *cmd)
 static const CmdSpec CMD_SPECS[] = {
     { CMD_PING,        AUTH_ANY,        ROOM_ANY,      h_ping     },
     { CMD_REGISTER,    AUTH_GUEST_ONLY, ROOM_ANY,      h_register },
-    { CMD_LOGIN,       AUTH_GUEST_ONLY, ROOM_ANY,      NULL       },
-    { CMD_LOGOUT,      AUTH_REQUIRED,   ROOM_ANY,      NULL   },
+    { CMD_LOGIN,       AUTH_GUEST_ONLY, ROOM_ANY,      h_login    },
+    { CMD_LOGOUT,      AUTH_REQUIRED,   ROOM_ANY,      h_logout   },
     { CMD_CREATE_ROOM, AUTH_REQUIRED,   ROOM_OUT_ONLY, NULL   },
     { CMD_LIST_ROOMS,  AUTH_REQUIRED,   ROOM_ANY,      NULL   },
     { CMD_JOIN_ROOM,   AUTH_REQUIRED,   ROOM_OUT_ONLY, NULL   },
@@ -44,6 +45,12 @@ void reply_err(Server *s, Conn *c, int code)
     if (!s || !c) {
         return;
     }
+    if (code >= 900) {
+        logger_log(&s->log, LOG_ERROR, clock_now_ms(&s->clock),
+                   "sid=%s room=%d event=ERROR code=%d",
+                   c->session_id[0] ? c->session_id : "-",
+                   c->room_id, code);
+    }
     int n = protocol_format_err(buf, sizeof(buf), code);
     if (n > 0) {
         conn_send_raw(&s->conns, c, buf, (size_t)n);
@@ -67,6 +74,10 @@ void dispatch_line(Server *s, Conn *c, const char *line)
     if (!s || !c || !line) {
         return;
     }
+
+    int64_t now_ms = clock_now_ms(&s->clock);
+    c->last_active_ms = now_ms;
+    logger_log_proto(&s->log, now_ms, c->session_id, line);
 
     int err = protocol_parse(line, &cmd);
     if (err != ERR_OK) {
