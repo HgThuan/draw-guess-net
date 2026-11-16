@@ -7,10 +7,13 @@
 #include <string.h>
 
 #include "auth.h"
+#include "dispatch.h"
 #include "protocol.h"
+#include "server.h"
 
 static UserStore s_us1;
 static UserStore s_us2;
+static Server s_srv;
 
 static void test_auth_username_and_password_bounds(void **state)
 {
@@ -153,6 +156,74 @@ static void test_auth_corrupted_file_and_edge_cases(void **state)
     assert_int_equal(auth_verify(NULL, "eve", "secret1", NULL), ERR_BAD_CREDENTIALS);
 }
 
+static void clear_conn_out(Conn *c)
+{
+    conn_consume_out(c, c->out_len);
+    conn_clear_dirty(&s_srv.conns);
+}
+
+static void test_auth_command_register_via_dispatch(void **state)
+{
+    Conn *c;
+    (void)state;
+
+    server_init(&s_srv, NULL);
+    user_store_init(&s_srv.users, NULL);
+    c = conn_alloc(&s_srv.conns, -1, 0);
+    assert_non_null(c);
+
+    /* Username boundary: 2, 3, 16, 17 chars */
+    dispatch_line(&s_srv, c, "REGISTER|ab|secret1");
+    assert_non_null(strstr(c->out, "ERR|112|"));
+    clear_conn_out(c);
+
+    dispatch_line(&s_srv, c, "REGISTER|abc|secret1");
+    assert_string_equal(c->out, "OK\n");
+    assert_int_equal(c->state, CONN_CONNECTED);
+    clear_conn_out(c);
+
+    dispatch_line(&s_srv, c, "REGISTER|user_12345678901|secret1");
+    assert_string_equal(c->out, "OK\n");
+    clear_conn_out(c);
+
+    dispatch_line(&s_srv, c, "REGISTER|user_123456789012|secret1");
+    assert_non_null(strstr(c->out, "ERR|112|"));
+    clear_conn_out(c);
+
+    /* Password boundary: 5, 6, 32, 33 bytes */
+    dispatch_line(&s_srv, c, "REGISTER|usr5|12345");
+    assert_non_null(strstr(c->out, "ERR|113|"));
+    clear_conn_out(c);
+
+    dispatch_line(&s_srv, c, "REGISTER|usr6|123456");
+    assert_string_equal(c->out, "OK\n");
+    clear_conn_out(c);
+
+    dispatch_line(&s_srv, c, "REGISTER|usr32|12345678901234567890123456789012");
+    assert_string_equal(c->out, "OK\n");
+    clear_conn_out(c);
+
+    dispatch_line(&s_srv, c, "REGISTER|usr33|123456789012345678901234567890123");
+    assert_non_null(strstr(c->out, "ERR|113|"));
+    clear_conn_out(c);
+
+    /* Duplicate username -> 110 */
+    dispatch_line(&s_srv, c, "REGISTER|abc|anotherpass");
+    assert_non_null(strstr(c->out, "ERR|110|"));
+    clear_conn_out(c);
+
+    /* Bad format -> 100 */
+    dispatch_line(&s_srv, c, "REGISTER|onlyone");
+    assert_non_null(strstr(c->out, "ERR|100|"));
+    clear_conn_out(c);
+
+    /* Already logged in -> 102 */
+    c->state = CONN_AUTHED;
+    dispatch_line(&s_srv, c, "REGISTER|newuser|secret1");
+    assert_non_null(strstr(c->out, "ERR|102|"));
+    clear_conn_out(c);
+}
+
 int run_auth_tests(void)
 {
     const struct CMUnitTest tests[] = {
@@ -160,6 +231,7 @@ int run_auth_tests(void)
         cmocka_unit_test(test_auth_register_and_verify_memory),
         cmocka_unit_test(test_auth_persistence_and_no_raw_password),
         cmocka_unit_test(test_auth_corrupted_file_and_edge_cases),
+        cmocka_unit_test(test_auth_command_register_via_dispatch),
     };
     return cmocka_run_group_tests_name("auth", tests, NULL, NULL);
 }

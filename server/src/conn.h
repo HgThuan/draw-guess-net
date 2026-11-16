@@ -26,7 +26,7 @@ typedef struct {
     uint16_t  gen;
     ConnState state;
     LineBuf   in;
-    char      out[OUT_BUF];
+    char      out[OUT_BUF + 1];
     size_t    out_len;
     bool      in_dirty;
     bool      closing;

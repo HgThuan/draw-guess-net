@@ -1,5 +1,7 @@
 #include "auth.h"
+#include "dispatch.h"
 #include "protocol.h"
+#include "server.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -292,4 +294,14 @@ int auth_verify(UserStore *us, const char *name, const char *pass, User **out_us
         *out_user = u;
     }
     return ERR_OK;
+}
+
+void h_register(struct Server *s, Conn *c, const Command *cmd)
+{
+    int rc = auth_register(&s->users, &s->rng, cmd->argv[0], cmd->argv[1]);
+    if (rc == ERR_OK) {
+        reply_ok(s, c, NULL);
+    } else {
+        reply_err(s, c, rc);
+    }
 }

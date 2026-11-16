@@ -107,6 +107,7 @@ bool conn_send_raw(ConnTable *t, Conn *c, const char *data, size_t len)
     }
     memcpy(c->out + c->out_len, data, len);
     c->out_len += len;
+    c->out[c->out_len] = '\0';
     if (!c->in_dirty && t->ndirty < MAX_CLIENTS) {
         t->dirty[t->ndirty++] = c->idx;
         c->in_dirty = true;
@@ -136,6 +137,7 @@ bool conn_send_line(ConnTable *t, Conn *c, const char *line)
     }
     c->out[c->out_len + len] = '\n';
     c->out_len += len + 1;
+    c->out[c->out_len] = '\0';
     if (!c->in_dirty && t->ndirty < MAX_CLIENTS) {
         t->dirty[t->ndirty++] = c->idx;
         c->in_dirty = true;
@@ -166,10 +168,12 @@ void conn_consume_out(Conn *c, size_t sent)
     }
     if (sent >= c->out_len) {
         c->out_len = 0;
+        c->out[0] = '\0';
         return;
     }
     memmove(c->out, c->out + sent, c->out_len - sent);
     c->out_len -= sent;
+    c->out[c->out_len] = '\0';
 }
 
 void conn_clear_dirty(ConnTable *t)
