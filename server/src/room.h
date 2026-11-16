@@ -42,6 +42,7 @@ typedef struct {
     char      options[3][WORD_MAX];
     char      word[WORD_MAX];
     int       guessed_count;
+    int       turn_guess_total;
     int64_t   phase_deadline_ms;
     int64_t   next_tick_ms;
 } Room;

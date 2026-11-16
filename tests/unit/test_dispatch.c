@@ -67,6 +67,15 @@ static void test_dispatch_syntax_and_priority(void **state)
     dispatch_line(&s_srv, c, long_line);
     assert_non_null(strstr(c->out, "ERR|104|"));
     clear_out(c);
+
+    /* Non-numeric integer arg returns 100 at Step 1 even when unauthenticated */
+    dispatch_line(&s_srv, c, "CHOOSE_WORD|abc");
+    assert_non_null(strstr(c->out, "ERR|100|"));
+    clear_out(c);
+
+    dispatch_line(&s_srv, c, "LIST_ROOMS|abc");
+    assert_non_null(strstr(c->out, "ERR|100|"));
+    clear_out(c);
 }
 
 typedef enum {
@@ -111,6 +120,10 @@ static void prepare_conn_in_state(Conn *c, MatrixState st)
         r->state = ROOM_LOBBY;
     } else if (st == ST_IN_CHOOSING) {
         r->state = ROOM_CHOOSING;
+        memcpy(r->drawer, "tester", 7);
+        memcpy(r->options[0], "cat", 4);
+        memcpy(r->options[1], "dog", 4);
+        memcpy(r->options[2], "tree", 5);
     } else {
         r->state = ROOM_DRAWING;
     }
@@ -129,7 +142,7 @@ static void test_dispatch_full_state_matrix(void **state)
         { "CREATE_ROOM|R1|4|3|60",       {   101,   0,  201,   201,  201 } },
         { "JOIN_ROOM|1",                 {   101, 200,  201,   201,  201 } },
         { "LEAVE_ROOM",                  {   101, 204,    0,     0,    0 } },
-        { "START",                       {   101, 204,    0,   300,  300 } },
+        { "START",                       {   101, 204,  207,   300,  300 } },
         { "SCOREBOARD",                  {   101, 204,    0,     0,    0 } },
         { "CHOOSE_WORD|1",               {   101, 204,  300,     0,  300 } },
         { "STROKE|FF0000|4|0,0,10,10",   {   101, 204,  300,   300,    0 } },

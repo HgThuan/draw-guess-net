@@ -13,6 +13,11 @@
 #define RSTATE_TURN_END (1u << ROOM_TURN_END)
 #define RSTATE_ANY      (RSTATE_LOBBY | RSTATE_CHOOSING | RSTATE_DRAWING | RSTATE_TURN_END)
 
+#define INT_ARG_NONE    0u
+#define INT_ARG_0       (1u << 0)
+#define INT_ARG_1       (1u << 1)
+#define INT_ARG_1_2_3   ((1u << 1) | (1u << 2) | (1u << 3))
+
 typedef enum {
     AUTH_ANY = 0,
     AUTH_GUEST_ONLY,
@@ -29,6 +34,7 @@ typedef void (*CmdHandler)(Server *s, Conn *c, const Command *cmd);
 
 typedef struct {
     CmdType    type;
+    uint32_t   int_mask;
     AuthReq    auth_req;
     RoomReq    room_req;
     uint32_t   room_states;

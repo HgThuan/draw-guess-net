@@ -1,5 +1,6 @@
 #include "dispatch.h"
 #include "auth.h"
+#include "game.h"
 #include "room.h"
 #include "session.h"
 #include <stddef.h>
@@ -11,21 +12,21 @@ static void h_ping(Server *s, Conn *c, const Command *cmd)
 }
 
 static const CmdSpec CMD_SPECS[] = {
-    { CMD_PING,        AUTH_ANY,        ROOM_ANY,      RSTATE_NONE,     h_ping        },
-    { CMD_REGISTER,    AUTH_GUEST_ONLY, ROOM_ANY,      RSTATE_NONE,     h_register    },
-    { CMD_LOGIN,       AUTH_GUEST_ONLY, ROOM_ANY,      RSTATE_NONE,     h_login       },
-    { CMD_LOGOUT,      AUTH_REQUIRED,   ROOM_ANY,      RSTATE_NONE,     h_logout      },
-    { CMD_CREATE_ROOM, AUTH_REQUIRED,   ROOM_OUT_ONLY, RSTATE_NONE,     h_create_room },
-    { CMD_LIST_ROOMS,  AUTH_REQUIRED,   ROOM_ANY,      RSTATE_NONE,     h_list_rooms  },
-    { CMD_JOIN_ROOM,   AUTH_REQUIRED,   ROOM_OUT_ONLY, RSTATE_NONE,     h_join_room   },
-    { CMD_LEAVE_ROOM,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      h_leave_room  },
-    { CMD_START,       AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_LOBBY,    NULL          },
-    { CMD_SCOREBOARD,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      NULL          },
-    { CMD_CHOOSE_WORD, AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_CHOOSING, NULL          },
-    { CMD_STROKE,      AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  NULL          },
-    { CMD_CLEAR,       AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  NULL          },
-    { CMD_GUESS,       AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  NULL          },
-    { CMD_CHAT,        AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      NULL          },
+    { CMD_PING,        INT_ARG_NONE,  AUTH_ANY,        ROOM_ANY,      RSTATE_NONE,     h_ping        },
+    { CMD_REGISTER,    INT_ARG_NONE,  AUTH_GUEST_ONLY, ROOM_ANY,      RSTATE_NONE,     h_register    },
+    { CMD_LOGIN,       INT_ARG_NONE,  AUTH_GUEST_ONLY, ROOM_ANY,      RSTATE_NONE,     h_login       },
+    { CMD_LOGOUT,      INT_ARG_NONE,  AUTH_REQUIRED,   ROOM_ANY,      RSTATE_NONE,     h_logout      },
+    { CMD_CREATE_ROOM, INT_ARG_1_2_3, AUTH_REQUIRED,   ROOM_OUT_ONLY, RSTATE_NONE,     h_create_room },
+    { CMD_LIST_ROOMS,  INT_ARG_0,     AUTH_REQUIRED,   ROOM_ANY,      RSTATE_NONE,     h_list_rooms  },
+    { CMD_JOIN_ROOM,   INT_ARG_0,     AUTH_REQUIRED,   ROOM_OUT_ONLY, RSTATE_NONE,     h_join_room   },
+    { CMD_LEAVE_ROOM,  INT_ARG_NONE,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      h_leave_room  },
+    { CMD_START,       INT_ARG_NONE,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_LOBBY,    h_start       },
+    { CMD_SCOREBOARD,  INT_ARG_NONE,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      NULL          },
+    { CMD_CHOOSE_WORD, INT_ARG_0,     AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_CHOOSING, h_choose_word },
+    { CMD_STROKE,      INT_ARG_1,     AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  NULL          },
+    { CMD_CLEAR,       INT_ARG_NONE,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  NULL          },
+    { CMD_GUESS,       INT_ARG_NONE,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  NULL          },
+    { CMD_CHAT,        INT_ARG_NONE,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      NULL          },
 };
 
 void reply_ok(Server *s, Conn *c, const char *payload)
@@ -80,6 +81,7 @@ void dispatch_line(Server *s, Conn *c, const char *line)
     c->last_active_ms = now_ms;
     logger_log_proto(&s->log, now_ms, c->session_id, line);
 
+    /* Step 1: Syntax and integer argument format */
     int err = protocol_parse(line, &cmd);
     if (err != ERR_OK) {
         reply_err(s, c, err);
@@ -92,6 +94,17 @@ void dispatch_line(Server *s, Conn *c, const char *line)
         return;                           /* GCOVR_EXCL_LINE */
     }
 
+    for (int i = 0; i < cmd.argc; i++) {
+        if (spec->int_mask & (1u << i)) {
+            int dummy;
+            if (!protocol_parse_int(cmd.argv[i], &dummy)) {
+                reply_err(s, c, ERR_BAD_FORMAT);
+                return;
+            }
+        }
+    }
+
+    /* Step 2: Login state */
     if (spec->auth_req == AUTH_REQUIRED && c->state != CONN_AUTHED) {
         reply_err(s, c, ERR_NOT_LOGGED_IN);
         return;
@@ -101,6 +114,7 @@ void dispatch_line(Server *s, Conn *c, const char *line)
         return;
     }
 
+    /* Step 3 & 4: Room membership and room game state */
     if (spec->room_req == ROOM_OUT_ONLY && c->room_id >= 0) {
         reply_err(s, c, ERR_ALREADY_IN_ROOM);
         return;

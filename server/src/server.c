@@ -1,5 +1,6 @@
 #include "server.h"
 #include "dispatch.h"
+#include "game.h"
 #include "protocol.h"
 #include "session.h"
 #include <string.h>
@@ -120,6 +121,7 @@ void server_tick(Server *s, int64_t now_ms)
     if (!s) {
         return;
     }
+    game_tick(s, now_ms);
     session_tick(s, now_ms);
     logger_tick(&s->log, now_ms);
 }
