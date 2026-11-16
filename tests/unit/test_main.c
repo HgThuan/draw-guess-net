@@ -18,6 +18,8 @@ int run_auth_tests(void);
 int run_session_tests(void);
 int run_room_tests(void);
 int run_client_lib_tests(void);
+int run_words_tests(void);
+int run_scoring_tests(void);
 
 static void test_sanity_check(void **state)
 {
@@ -49,5 +51,7 @@ int main(void)
     rc |= run_session_tests();
     rc |= run_room_tests();
     rc |= run_client_lib_tests();
+    rc |= run_words_tests();
+    rc |= run_scoring_tests();
     return rc;
 }

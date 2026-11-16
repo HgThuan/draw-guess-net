@@ -10,6 +10,7 @@
 #include "conn.h"
 #include "logger.h"
 #include "room.h"
+#include "words.h"
 
 typedef struct Server {
     Config    cfg;
@@ -17,6 +18,7 @@ typedef struct Server {
     Rng       rng;
     Logger    log;
     UserStore users;
+    WordList  words;
     Room      rooms[MAX_ROOMS];
     int       next_room_id;
     ConnTable conns;
