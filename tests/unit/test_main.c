@@ -16,6 +16,7 @@ int run_sha256_tests(void);
 int run_logger_tests(void);
 int run_auth_tests(void);
 int run_session_tests(void);
+int run_room_tests(void);
 
 static void test_sanity_check(void **state)
 {
@@ -45,5 +46,6 @@ int main(void)
     rc |= run_logger_tests();
     rc |= run_auth_tests();
     rc |= run_session_tests();
+    rc |= run_room_tests();
     return rc;
 }

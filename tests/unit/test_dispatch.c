@@ -120,7 +120,7 @@ static void test_dispatch_auth_and_room_checks(void **state)
     clear_out(c);
 
     /* Unimplemented handler returns 900 */
-    dispatch_line(&s_srv, c, "LEAVE_ROOM");
+    dispatch_line(&s_srv, c, "START");
     assert_non_null(strstr(c->out, "ERR|900|"));
     clear_out(c);
 }
