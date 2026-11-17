@@ -24,6 +24,7 @@ typedef enum {
     GAME_END_NOT_ENOUGH_PLAYERS
 } GameEndReason;
 
+bool game_is_current_drawer(const Room *r, const char *name);
 bool game_next_drawer(struct Server *s, Room *r);
 bool game_all_guessed(const Room *r);
 void game_format_ranking(const Room *r, char *out, size_t cap);

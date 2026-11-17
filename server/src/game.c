@@ -45,6 +45,15 @@ static int find_player_idx(const Room *r, const char *name)
     return -1;
 }
 
+bool game_is_current_drawer(const Room *r, const char *name)
+{
+    if (!r || !name || name[0] == '\0') {
+        return false;
+    }
+    return (r->state == ROOM_CHOOSING || r->state == ROOM_DRAWING) &&
+           strcmp(r->drawer, name) == 0;
+}
+
 bool game_next_drawer(struct Server *s, Room *r)
 {
     (void)s;
@@ -409,6 +418,8 @@ void h_guess(struct Server *s, Conn *c, const Command *cmd)
         remaining_s = r->draw_time; /* GCOVR_EXCL_LINE */
     }
 
+    /* Ordinal rank k counts all correct guesses in the turn (even if an earlier guesser left),
+     * and turn_guess_total accumulates their points; drawer points divide by current nplayers - 1 at turn end. */
     r->guessed_count++;
     int pts = scoring_guess(r->guessed_count, remaining_s, r->draw_time);
     p->guessed = true;
@@ -457,6 +468,11 @@ void game_on_player_left(struct Server *s, Room *r, const char *left_user, bool 
 
     if (was_drawer && (r->state == ROOM_CHOOSING || r->state == ROOM_DRAWING)) {
         game_end_turn(s, r, TURN_END_DRAWER_LEFT, clock_now_ms(&s->clock));
+        return;
+    }
+
+    if (!was_drawer && r->state == ROOM_DRAWING && game_all_guessed(r)) {
+        game_end_turn(s, r, TURN_END_ALL_GUESSED, clock_now_ms(&s->clock));
     }
 }
 
