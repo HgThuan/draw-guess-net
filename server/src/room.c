@@ -64,16 +64,18 @@ Room *room_find(struct Server *s, int room_id)
     return NULL;
 }
 
-void room_broadcast(struct Server *s, const Room *r, const char *line, int exclude_idx)
+void room_broadcast(struct Server *s, const Room *r, const char *line, ConnId exclude)
 {
     if (!s || !r || !line) {
         return;
     }
     for (int i = 0; i < r->nplayers; i++) {
-        if (i == exclude_idx) {
+        ConnId pid = r->players[i].conn;
+        if (exclude.idx != CONN_IDX_NONE &&
+            pid.idx == exclude.idx && pid.gen == exclude.gen) {
             continue;
         }
-        Conn *pc = conn_get(&s->conns, r->players[i].conn);
+        Conn *pc = conn_get(&s->conns, pid);
         if (pc && !pc->closing) {
             conn_send_line(&s->conns, pc, line);
         }
@@ -234,7 +236,7 @@ void h_join_room(struct Server *s, Conn *c, const Command *cmd)
 
     char ev[64];
     (void)snprintf(ev, sizeof(ev), "PLAYER_JOINED|%s", c->user);
-    room_broadcast(s, r, ev, idx);
+    room_broadcast(s, r, ev, conn_id(c));
 }
 
 void room_leave(struct Server *s, Conn *c, const char *reason)
@@ -279,11 +281,11 @@ void room_leave(struct Server *s, Conn *c, const char *reason)
     char ev[64];
     (void)snprintf(ev, sizeof(ev), "PLAYER_LEFT|%s|%s",
                    left_name, (reason && reason[0]) ? reason : "LEAVE");
-    room_broadcast(s, r, ev, -1);
+    room_broadcast(s, r, ev, CONN_ID_NONE);
 
     if (pidx == 0) {
         (void)snprintf(ev, sizeof(ev), "HOST_CHANGED|%s", r->players[0].name);
-        room_broadcast(s, r, ev, -1);
+        room_broadcast(s, r, ev, CONN_ID_NONE);
     }
 
     if (r->state != ROOM_LOBBY) {

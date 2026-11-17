@@ -85,10 +85,12 @@ static void test_words_match_contains_and_hint(void **state)
     char hint[WORD_MAX];
     (void)state;
 
-    /* words_match: case-insensitive, trims and collapses whitespace */
+    /* words_match: case-insensitive, trims leading/trailing spaces only */
     assert_true(words_match("cat", "cat"));
-    assert_true(words_match("  CaT \r\n", "cat"));
-    assert_true(words_match("  ICE    Cream ", "ice cream"));
+    assert_true(words_match("  CaT  ", "cat"));
+    assert_true(words_match("  ICE Cream ", "ice cream"));
+    assert_false(words_match("ice  cream", "ice cream"));
+    assert_false(words_match("cat\t", "cat"));
     assert_false(words_match("cat", "dog"));
     assert_false(words_match("", "cat"));
     assert_false(words_match(NULL, "cat"));

@@ -1,6 +1,7 @@
 #ifndef NETSKETCH_DISPATCH_H
 #define NETSKETCH_DISPATCH_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "protocol.h"
 #include "room.h"
@@ -35,6 +36,7 @@ typedef void (*CmdHandler)(Server *s, Conn *c, const Command *cmd);
 typedef struct {
     CmdType    type;
     uint32_t   int_mask;
+    bool       free_text;
     AuthReq    auth_req;
     RoomReq    room_req;
     uint32_t   room_states;

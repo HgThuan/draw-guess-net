@@ -166,14 +166,41 @@ bool words_pick3(const WordList *wl, Rng *rng, char out[3][WORD_MAX])
 
 bool words_match(const char *guess, const char *word)
 {
-    char ng[WORD_MAX];
-    char nw[WORD_MAX];
-    size_t lg = normalize_str(guess, ng, sizeof(ng), true);
-    size_t lw = normalize_str(word, nw, sizeof(nw), true);
-    if (lg == 0 || lw == 0 || lg != lw) {
+    if (!guess || !word) {
         return false;
     }
-    return memcmp(ng, nw, lg) == 0;
+
+    while (*guess == ' ') {
+        guess++;
+    }
+    size_t glen = strlen(guess);
+    while (glen > 0 && guess[glen - 1] == ' ') {
+        glen--;
+    }
+
+    while (*word == ' ') {
+        word++;
+    }
+    size_t wlen = strlen(word);
+    while (wlen > 0 && word[wlen - 1] == ' ') {
+        wlen--;
+    }
+
+    if (glen == 0 || wlen == 0 || glen != wlen) {
+        return false;
+    }
+
+    for (size_t i = 0; i < glen; i++) {
+        unsigned char cg = (unsigned char)guess[i];
+        unsigned char cw = (unsigned char)word[i];
+        if (cg < 0x20 || cg >= 0x7F || cw < 0x20 || cw >= 0x7F) {
+            return false;
+        }
+        if (to_lower_ascii((char)cg) != to_lower_ascii((char)cw)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool words_contains(const char *text, const char *word)

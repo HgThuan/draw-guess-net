@@ -28,6 +28,7 @@ TEST_SRCS         := $(wildcard tests/unit/*.c)
 
 LOGIC_PATHS := common server/src/auth.c server/src/auth.h server/src/session.c server/src/session.h \
                server/src/room.c server/src/room.h server/src/game.c server/src/game.h \
+               server/src/draw.c server/src/draw.h \
                server/src/scoring.c server/src/scoring.h server/src/chat.c server/src/chat.h \
                server/src/words.c server/src/words.h server/src/dispatch.c server/src/dispatch.h
 

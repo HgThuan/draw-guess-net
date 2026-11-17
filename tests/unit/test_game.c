@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "dispatch.h"
+#include "draw.h"
 #include "game.h"
 
 static Server s_srv;
@@ -361,6 +362,359 @@ static void test_game_drawer_leaves_during_choosing(void **state)
     game_on_player_left(NULL, NULL, NULL, false);
 }
 
+static void test_game_stroke_and_clear_validation_and_forwarding(void **state)
+{
+    Conn *a1;
+    Conn *a2;
+    Conn *a3;
+    Conn *b1;
+    Conn *b2;
+    Conn *unauth;
+    (void)state;
+
+    init_test_server();
+    unauth = conn_alloc(&s_srv.conns, -1, 1000);
+    a1 = make_user("alice");
+    a2 = make_user("bob");
+    a3 = make_user("carol");
+    b1 = make_user("dave");
+    b2 = make_user("erin");
+
+    /* Room 1: alice (drawer), bob, carol; Room 2: dave (drawer), erin */
+    dispatch_line(&s_srv, a1, "CREATE_ROOM|R1|4|2|60");
+    dispatch_line(&s_srv, a2, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, a3, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, a1, "START");
+    dispatch_line(&s_srv, a1, "CHOOSE_WORD|1");
+    clear_out(a1);
+    clear_out(a2);
+    clear_out(a3);
+
+    dispatch_line(&s_srv, b1, "CREATE_ROOM|R2|4|2|60");
+    dispatch_line(&s_srv, b2, "JOIN_ROOM|2");
+    dispatch_line(&s_srv, b1, "START");
+    dispatch_line(&s_srv, b1, "CHOOSE_WORD|1");
+    clear_out(b1);
+    clear_out(b2);
+
+    /* Step 1: Invalid width number syntax (-1, +5, 99999999999, abc) -> 100 in all roles */
+    const char *bad_widths[] = {
+        "STROKE|FF0000|-1|0,0,10,10",
+        "STROKE|FF0000|+5|0,0,10,10",
+        "STROKE|FF0000|99999999999|0,0,10,10",
+        "STROKE|GG|abc|0,0,10,10"
+    };
+    for (size_t i = 0; i < 4; i++) {
+        dispatch_line(&s_srv, unauth, bad_widths[i]);
+        assert_non_null(strstr(unauth->out, "ERR|100|"));
+        clear_out(unauth);
+
+        dispatch_line(&s_srv, a2, bad_widths[i]);
+        assert_non_null(strstr(a2->out, "ERR|100|"));
+        clear_out(a2);
+
+        dispatch_line(&s_srv, a1, bad_widths[i]);
+        assert_non_null(strstr(a1->out, "ERR|100|"));
+        clear_out(a1);
+    }
+
+    /* Step 5 before Step 6: Guesser sending STROKE|GG|5|... gets 301 (not 305), CLEAR gets 301 */
+    dispatch_line(&s_srv, a2, "STROKE|GG|5|0,0,10,10");
+    assert_non_null(strstr(a2->out, "ERR|301|"));
+    clear_out(a2);
+
+    dispatch_line(&s_srv, a2, "CLEAR");
+    assert_non_null(strstr(a2->out, "ERR|301|"));
+    clear_out(a2);
+
+    /* Step 6: Drawer sending invalid stroke parameters -> 305 */
+    const char *bad_strokes[] = {
+        "STROKE|FFF|4|0,0,10,10",
+        "STROKE|1234567|4|0,0,10,10",
+        "STROKE|GG0000|4|0,0,10,10",
+        "STROKE|FF0000|0|0,0,10,10",
+        "STROKE|FF0000|21|0,0,10,10",
+        "STROKE|FF0000|4|10,20",
+        "STROKE|FF0000|4|10,20,30,40,50",
+        "STROKE|FF0000|4|0,-5,10,10",
+        "STROKE|FF0000|4|0,+5,10,10",
+        "STROKE|FF0000|4|0,1a,10,10",
+        "STROKE|FF0000|4|0, 5,10,10",
+        "STROKE|FF0000|4|0,1001,10,10",
+        "STROKE|FF0000|4|0,999999999999999999,10,10",
+        "STROKE|FF0000|4|,0,0,10,10",
+        "STROKE|FF0000|4|0,0,,10,10",
+        "STROKE|FF0000|4|0,0,10,10,"
+    };
+    for (size_t i = 0; i < sizeof(bad_strokes) / sizeof(bad_strokes[0]); i++) {
+        dispatch_line(&s_srv, a1, bad_strokes[i]);
+        assert_non_null(strstr(a1->out, "ERR|305|"));
+        assert_int_equal(a2->out_len, 0);
+        clear_out(a1);
+    }
+
+    /* 41 points (82 numbers) -> 305; 40 points (80 numbers) -> valid */
+    char pts82[400];
+    size_t pos = 0;
+    for (int i = 0; i < 41; i++) {
+        pos += (size_t)snprintf(pts82 + pos, sizeof(pts82) - pos, "%s%d,%d",
+                                (i > 0) ? "," : "", i, i);
+    }
+    assert_int_equal(stroke_validate("ffffff", 20, pts82), ERR_INVALID_STROKE);
+    assert_int_equal(stroke_validate(NULL, 4, "0,0,1,1"), ERR_INVALID_STROKE);
+    assert_int_equal(stroke_validate("FF0000", 4, ""), ERR_INVALID_STROKE);
+
+    char pts80[400];
+    pos = 0;
+    for (int i = 0; i < 40; i++) {
+        pos += (size_t)snprintf(pts80 + pos, sizeof(pts80) - pos, "%s%d,%d",
+                                (i > 0) ? "," : "", i * 25, 1000);
+    }
+    assert_int_equal(stroke_validate("aAbBcC", 1, pts80), ERR_OK);
+
+    /* Valid STROKE with leading zeros 0000000007 via CRLF framing */
+    const char *raw_crlf = "STROKE|00ffAA|20|0,1000,0000000007,500\r\n";
+    size_t consumed = 0;
+    char framed_line[FRAME_MAX_LINE];
+    assert_int_equal(linebuf_feed(&a1->in, raw_crlf, strlen(raw_crlf),
+                                  &consumed, framed_line, sizeof(framed_line)),
+                     FRAME_OK);
+    dispatch_line(&s_srv, a1, framed_line);
+
+    /* Drawer gets no reply; guessers in Room 1 get exact single-\n line; Room 2 gets nothing */
+    assert_int_equal(a1->out_len, 0);
+    assert_string_equal(a2->out, "STROKE|00ffAA|20|0,1000,0000000007,500\n");
+    assert_string_equal(a3->out, "STROKE|00ffAA|20|0,1000,0000000007,500\n");
+    assert_int_equal(b1->out_len, 0);
+    assert_int_equal(b2->out_len, 0);
+    clear_out(a2);
+    clear_out(a3);
+
+    /* Valid CLEAR */
+    dispatch_line(&s_srv, a1, "CLEAR");
+    assert_int_equal(a1->out_len, 0);
+    assert_string_equal(a2->out, "CLEAR\n");
+    assert_string_equal(a3->out, "CLEAR\n");
+    assert_int_equal(b1->out_len, 0);
+    assert_int_equal(b2->out_len, 0);
+    clear_out(a2);
+    clear_out(a3);
+
+    /* Deterministic fuzzing of stroke_validate under ASan */
+    Rng rng;
+    rng_init_fake(&rng, 20261117);
+    char fbuf[128];
+    for (int iter = 0; iter < 300; iter++) {
+        size_t flen = (size_t)rng_range(&rng, 0, 100);
+        for (size_t k = 0; k < flen; k++) {
+            fbuf[k] = (char)rng_range(&rng, 1, 126);
+        }
+        fbuf[flen] = '\0';
+        (void)stroke_validate(fbuf, rng_range(&rng, -2, 25), fbuf);
+    }
+}
+
+static void test_game_guess_scoring_and_deadline_bounds(void **state)
+{
+    Conn *a1;
+    Conn *a2;
+    Conn *a3;
+    Conn *a4;
+    Conn *b1;
+    Conn *b2;
+    Conn *unauth;
+    (void)state;
+
+    init_test_server();
+    unauth = conn_alloc(&s_srv.conns, -1, 1000);
+    a1 = make_user("alice");
+    a2 = make_user("bob");
+    a3 = make_user("carol");
+    a4 = make_user("dave");
+    b1 = make_user("erin");
+    b2 = make_user("frank");
+
+    /* Step 1: Empty/whitespace-only, tab control char, or >200 bytes -> 100 in all states */
+    char cmd_201[220];
+    memcpy(cmd_201, "GUESS|", 6);
+    memset(cmd_201 + 6, 'x', 201);
+    cmd_201[207] = '\0';
+
+    const char *bad_guesses[] = {
+        "GUESS|",
+        "GUESS|     ",
+        "GUESS|cat\tdog",
+        cmd_201
+    };
+    for (size_t i = 0; i < 4; i++) {
+        dispatch_line(&s_srv, unauth, bad_guesses[i]);
+        assert_non_null(strstr(unauth->out, "ERR|100|"));
+        clear_out(unauth);
+    }
+
+    dispatch_line(&s_srv, a1, "CREATE_ROOM|R1|4|2|60");
+    dispatch_line(&s_srv, a2, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, a3, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, a4, "JOIN_ROOM|1");
+    clear_out(a1);
+    clear_out(a2);
+    clear_out(a3);
+    clear_out(a4);
+
+    /* In LOBBY: GUESS| -> 100, GUESS|cat -> 300 */
+    dispatch_line(&s_srv, a1, "GUESS|");
+    assert_non_null(strstr(a1->out, "ERR|100|"));
+    clear_out(a1);
+
+    dispatch_line(&s_srv, a1, "GUESS|cat");
+    assert_non_null(strstr(a1->out, "ERR|300|"));
+    clear_out(a1);
+
+    dispatch_line(&s_srv, a1, "START");
+    /* Force option 1 to "cat" */
+    (void)snprintf(s_srv.rooms[0].options[0], sizeof(s_srv.rooms[0].options[0]), "cat");
+    dispatch_line(&s_srv, a1, "CHOOSE_WORD|1");
+    clear_out(a1);
+    clear_out(a2);
+    clear_out(a3);
+    clear_out(a4);
+
+    /* Room 2 for 15001 ms rounding comparison */
+    dispatch_line(&s_srv, b1, "CREATE_ROOM|R2|4|2|60");
+    dispatch_line(&s_srv, b2, "JOIN_ROOM|2");
+    dispatch_line(&s_srv, b1, "START");
+    (void)snprintf(s_srv.rooms[1].options[0], sizeof(s_srv.rooms[1].options[0]), "cat");
+    dispatch_line(&s_srv, b1, "CHOOSE_WORD|1");
+    clear_out(b1);
+    clear_out(b2);
+
+    /* Drawer sending GUESS| -> 100 (Step 1); GUESS|cat -> 302 (Step 5) */
+    dispatch_line(&s_srv, a1, "GUESS|");
+    assert_non_null(strstr(a1->out, "ERR|100|"));
+    clear_out(a1);
+
+    dispatch_line(&s_srv, a1, "GUESS|cat");
+    assert_non_null(strstr(a1->out, "ERR|302|"));
+    clear_out(a1);
+
+    /* Wrong guess with 200 bytes and '|' inside free-text */
+    char cmd_200[220];
+    memcpy(cmd_200, "GUESS|a|b|", 10);
+    memset(cmd_200 + 10, 'z', 196);
+    cmd_200[206] = '\0';
+    dispatch_line(&s_srv, a2, cmd_200);
+    assert_true(strncmp(a2->out, "OK|WRONG\nGUESS_WRONG|bob|a|b|", 29) == 0);
+    assert_true(strlen(a1->out) < FRAME_MAX_LINE);
+    assert_true(strncmp(a1->out, "GUESS_WRONG|bob|a|b|", 20) == 0);
+    clear_out(a1);
+    clear_out(a2);
+    clear_out(a3);
+    clear_out(a4);
+
+    /* Advance 14999 ms (rem_ms = 45001 -> remaining_s = 45): carol (k=1) gets 400 pts */
+    clock_advance(&s_srv.clock, 14999);
+    dispatch_line(&s_srv, a3, "GUESS|   CaT  ");
+    assert_string_equal(a3->out, "OK|CORRECT|400\nGUESS_CORRECT|carol|400\n");
+    assert_string_equal(a1->out, "GUESS_CORRECT|carol|400\n");
+    assert_string_equal(a2->out, "GUESS_CORRECT|carol|400\n");
+    assert_int_equal(s_srv.rooms[0].players[2].score, 400);
+    assert_int_equal(s_srv.rooms[0].players[2].turn_delta, 400);
+    assert_int_equal(s_srv.rooms[0].turn_guess_total, 400);
+    clear_out(a1);
+    clear_out(a2);
+    clear_out(a3);
+    clear_out(a4);
+
+    /* carol guessing again -> 303 */
+    dispatch_line(&s_srv, a3, "GUESS|cat");
+    assert_non_null(strstr(a3->out, "ERR|303|"));
+    clear_out(a3);
+
+    /* Advance 2 ms to 15001 ms elapsed (rem_ms = 44999 -> remaining_s = 44): frank in Room 2 gets 393 pts */
+    clock_advance(&s_srv.clock, 2);
+    dispatch_line(&s_srv, b2, "GUESS|cat");
+    assert_string_equal(b2->out, "OK|CORRECT|393\nGUESS_CORRECT|frank|393\n");
+    clear_out(b1);
+    clear_out(b2);
+
+    /* Advance to 30000 ms elapsed (remaining_s = 30): bob (k=2) in Room 1 gets 275 pts */
+    clock_advance(&s_srv.clock, 14999);
+    dispatch_line(&s_srv, a2, "GUESS|CAT");
+    assert_string_equal(a2->out, "OK|CORRECT|275\nGUESS_CORRECT|bob|275\n");
+    assert_int_equal(s_srv.rooms[0].turn_guess_total, 675);
+    clear_out(a1);
+    clear_out(a2);
+    clear_out(a3);
+    clear_out(a4);
+
+    /* Advance to 59999 ms elapsed (rem_ms = 1 -> remaining_s = 0): STROKE/CLEAR/GUESS still accepted, dave (k=3) gets 50 pts */
+    clock_advance(&s_srv.clock, 29999);
+    dispatch_line(&s_srv, a1, "CLEAR");
+    assert_string_equal(a2->out, "CLEAR\n");
+    clear_out(a2);
+    clear_out(a3);
+    clear_out(a4);
+
+    dispatch_line(&s_srv, a4, "GUESS|cat");
+    assert_string_equal(a4->out, "OK|CORRECT|50\nGUESS_CORRECT|dave|50\n");
+    assert_int_equal(s_srv.rooms[0].turn_guess_total, 725);
+    assert_true(game_all_guessed(&s_srv.rooms[0]));
+    clear_out(a1);
+    clear_out(a2);
+    clear_out(a3);
+    clear_out(a4);
+
+    /* Advance 1 ms to 60000 ms (now_ms == phase_deadline_ms): STROKE, CLEAR, GUESS all return 300 */
+    clock_advance(&s_srv.clock, 1);
+    dispatch_line(&s_srv, a1, "STROKE|FF0000|4|0,0,10,10");
+    assert_non_null(strstr(a1->out, "ERR|300|"));
+    clear_out(a1);
+
+    dispatch_line(&s_srv, a1, "CLEAR");
+    assert_non_null(strstr(a1->out, "ERR|300|"));
+    clear_out(a1);
+
+    dispatch_line(&s_srv, b2, "GUESS|cat");
+    assert_non_null(strstr(b2->out, "ERR|300|"));
+    clear_out(b2);
+}
+
+static void test_game_all_guessed_cases(void **state)
+{
+    Room r;
+    (void)state;
+
+    assert_false(game_all_guessed(NULL));
+
+    memset(&r, 0, sizeof(r));
+    r.id = 1;
+    memcpy(r.drawer, "alice", 6);
+    memcpy(r.players[0].name, "alice", 6);
+    memcpy(r.players[1].name, "bob", 4);
+    memcpy(r.players[2].name, "carol", 6);
+    r.nplayers = 3;
+
+    /* Nobody guessed */
+    assert_false(game_all_guessed(&r));
+
+    /* Partial guessed */
+    r.players[1].guessed = true;
+    assert_false(game_all_guessed(&r));
+
+    /* Un-guessed player leaves -> remaining guesser has guessed -> true */
+    r.nplayers = 2;
+    assert_true(game_all_guessed(&r));
+
+    /* All 3 present and all guessers guessed -> true */
+    r.nplayers = 3;
+    r.players[2].guessed = true;
+    assert_true(game_all_guessed(&r));
+
+    /* Only drawer left in room (0 guessers) -> must be false */
+    r.nplayers = 1;
+    assert_false(game_all_guessed(&r));
+}
+
 int run_game_tests(void)
 {
     const struct CMUnitTest tests[] = {
@@ -369,6 +723,9 @@ int run_game_tests(void)
         cmocka_unit_test(test_game_auto_pick_timeout_and_all_indices),
         cmocka_unit_test(test_game_time_ticks_schedule_and_isolation),
         cmocka_unit_test(test_game_drawer_leaves_during_choosing),
+        cmocka_unit_test(test_game_stroke_and_clear_validation_and_forwarding),
+        cmocka_unit_test(test_game_guess_scoring_and_deadline_bounds),
+        cmocka_unit_test(test_game_all_guessed_cases),
     };
     return cmocka_run_group_tests_name("game", tests, NULL, NULL);
 }

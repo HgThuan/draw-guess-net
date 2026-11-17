@@ -126,6 +126,8 @@ static void prepare_conn_in_state(Conn *c, MatrixState st)
         memcpy(r->options[2], "tree", 5);
     } else {
         r->state = ROOM_DRAWING;
+        memcpy(r->drawer, "tester", 7);
+        memcpy(r->word, "cat", 4);
     }
     c->room_id = 1;
 }
@@ -147,7 +149,7 @@ static void test_dispatch_full_state_matrix(void **state)
         { "CHOOSE_WORD|1",               {   101, 204,  300,     0,  300 } },
         { "STROKE|FF0000|4|0,0,10,10",   {   101, 204,  300,   300,    0 } },
         { "CLEAR",                       {   101, 204,  300,   300,    0 } },
-        { "GUESS|cat",                   {   101, 204,  300,   300,    0 } },
+        { "GUESS|cat",                   {   101, 204,  300,   300,  302 } },
         { "CHAT|hello",                  {   101, 204,    0,     0,    0 } },
     };
 
@@ -176,8 +178,9 @@ static void test_dispatch_full_state_matrix(void **state)
             dispatch_line(&s_srv, c, line);
             int expected = ROWS[i].exp[st];
             if (expected == 0) {
-                /* Passed pre-handler state checks: response is PONG, OK..., or ERR|900 for unimplemented */
-                bool passed = (strncmp(c->out, "OK", 2) == 0) ||
+                /* Passed pre-handler state checks: response is empty (STROKE/CLEAR), PONG, OK..., or ERR|900 */
+                bool passed = (c->out_len == 0) ||
+                              (strncmp(c->out, "OK", 2) == 0) ||
                               (strncmp(c->out, "PONG", 4) == 0) ||
                               (strncmp(c->out, "ERR|900|", 8) == 0);
                 assert_true(passed);

@@ -1,5 +1,6 @@
 #include "game.h"
 #include "dispatch.h"
+#include "scoring.h"
 #include "server.h"
 #include "words.h"
 #include <stdio.h>
@@ -49,6 +50,26 @@ bool game_next_drawer(struct Server *s, Room *r)
     }
 }
 
+bool game_all_guessed(const Room *r)
+{
+    if (!r || r->nplayers < 2) {
+        return false;
+    }
+
+    int guesser_total = 0;
+    int guessed_now = 0;
+    for (int i = 0; i < r->nplayers; i++) {
+        if (strcmp(r->players[i].name, r->drawer) == 0) {
+            continue;
+        }
+        guesser_total++;
+        if (r->players[i].guessed) {
+            guessed_now++;
+        }
+    }
+    return guesser_total > 0 && guessed_now == guesser_total;
+}
+
 static void enter_choosing(struct Server *s, Room *r,
                            const char picked[3][WORD_MAX], int64_t now_ms)
 {
@@ -68,7 +89,7 @@ static void enter_choosing(struct Server *s, Room *r,
     char ev[128];
     (void)snprintf(ev, sizeof(ev), "TURN_START|%d|%s|%d",
                    r->round, r->drawer, s->cfg.choose_time_s);
-    room_broadcast(s, r, ev, -1);
+    room_broadcast(s, r, ev, CONN_ID_NONE);
 
     int didx = find_player_idx(r, r->drawer);
     if (didx >= 0) {
@@ -166,7 +187,7 @@ void h_start(struct Server *s, Conn *c, const Command *cmd)
 
     char ev[256];
     (void)snprintf(ev, sizeof(ev), "GAME_START|%d|%s", r->rounds, plist);
-    room_broadcast(s, r, ev, -1);
+    room_broadcast(s, r, ev, CONN_ID_NONE);
 
     enter_choosing(s, r, picked, clock_now_ms(&s->clock));
 }
@@ -195,6 +216,64 @@ void h_choose_word(struct Server *s, Conn *c, const Command *cmd)
 
     reply_ok(s, c, NULL);
     game_begin_drawing(s, r, idx - 1, clock_now_ms(&s->clock));
+}
+
+void h_guess(struct Server *s, Conn *c, const Command *cmd)
+{
+    Room *r = room_find(s, c->room_id);
+    if (!r) {
+        reply_err(s, c, ERR_NOT_IN_ROOM); /* GCOVR_EXCL_LINE */
+        return;                           /* GCOVR_EXCL_LINE */
+    }
+
+    int pidx = find_player_idx(r, c->user);
+    if (pidx < 0) {
+        reply_err(s, c, ERR_NOT_IN_ROOM); /* GCOVR_EXCL_LINE */
+        return;                           /* GCOVR_EXCL_LINE */
+    }
+
+    /* Step 5: Drawer cannot guess (302), already guessed cannot guess again (303) */
+    if (strcmp(c->user, r->drawer) == 0) {
+        reply_err(s, c, ERR_IS_DRAWER);
+        return;
+    }
+
+    Player *p = &r->players[pidx];
+    if (p->guessed) {
+        reply_err(s, c, ERR_ALREADY_GUESSED);
+        return;
+    }
+
+    const char *text = cmd->argv[0];
+    if (!words_match(text, r->word)) {
+        reply_ok(s, c, "WRONG");
+        char ev[MAX_LINE];
+        (void)snprintf(ev, sizeof(ev), "GUESS_WRONG|%s|%s", c->user, text);
+        room_broadcast(s, r, ev, CONN_ID_NONE);
+        return;
+    }
+
+    int64_t now_ms = clock_now_ms(&s->clock);
+    int64_t rem_ms = r->phase_deadline_ms - now_ms;
+    int remaining_s = (rem_ms > 0) ? (int)(rem_ms / 1000) : 0;
+    if (remaining_s > r->draw_time) {
+        remaining_s = r->draw_time; /* GCOVR_EXCL_LINE */
+    }
+
+    r->guessed_count++;
+    int pts = scoring_guess(r->guessed_count, remaining_s, r->draw_time);
+    p->guessed = true;
+    p->turn_delta = pts;
+    p->score += pts;
+    r->turn_guess_total += pts;
+
+    char ok_payload[32];
+    (void)snprintf(ok_payload, sizeof(ok_payload), "CORRECT|%d", pts);
+    reply_ok(s, c, ok_payload);
+
+    char ev[128];
+    (void)snprintf(ev, sizeof(ev), "GUESS_CORRECT|%s|%d", c->user, pts);
+    room_broadcast(s, r, ev, CONN_ID_NONE);
 }
 
 void game_on_player_left(struct Server *s, Room *r, const char *left_user, bool was_drawer)
@@ -248,7 +327,7 @@ static void tick_drawing(struct Server *s, Room *r, int64_t now_ms)
         if (rem > 0) {
             char ev[32];
             (void)snprintf(ev, sizeof(ev), "TIME|%d", rem);
-            room_broadcast(s, r, ev, -1);
+            room_broadcast(s, r, ev, CONN_ID_NONE);
         }
     }
 }
