@@ -6,10 +6,30 @@
 #include <stdio.h>
 #include <string.h>
 
+static const char *turn_end_reason_str(TurnEndReason r)
+{
+    switch (r) {
+    case TURN_END_ALL_GUESSED: return "ALL_GUESSED";
+    case TURN_END_DRAWER_LEFT: return "DRAWER_LEFT";
+    case TURN_END_TIMEUP:
+    default:                   return "TIMEUP";
+    }
+}
+
+static const char *game_end_reason_str(GameEndReason r)
+{
+    switch (r) {
+    case GAME_END_NOT_ENOUGH_PLAYERS: return "NOT_ENOUGH_PLAYERS";
+    case GAME_END_FINISHED:
+    default:                          return "FINISHED";
+    }
+}
+
+/* Snapshot current players into order[] and set order_pos = -1 so game_next_drawer() increments to 0. */
 static void snapshot_round_order(Room *r)
 {
     r->order_n = r->nplayers;
-    r->order_pos = 0;
+    r->order_pos = -1;
     for (int i = 0; i < r->nplayers; i++) {
         memcpy(r->order[i], r->players[i].name, sizeof(r->order[i]));
     }
@@ -33,6 +53,7 @@ bool game_next_drawer(struct Server *s, Room *r)
     }
 
     for (;;) {
+        r->order_pos++;
         while (r->order_pos < r->order_n) {
             const char *cand = r->order[r->order_pos];
             if (find_player_idx(r, cand) >= 0) {
@@ -70,6 +91,92 @@ bool game_all_guessed(const Room *r)
     return guesser_total > 0 && guessed_now == guesser_total;
 }
 
+void game_format_ranking(const Room *r, char *out, size_t cap)
+{
+    if (!out || cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (!r || r->nplayers <= 0) {
+        return;
+    }
+
+    Player sorted[MAX_PLAYERS];
+    int n = r->nplayers;
+    for (int i = 0; i < n; i++) {
+        sorted[i] = r->players[i];
+    }
+
+    /* Insertion sort: score descending, tie-break by username ascending (ASCII strcmp) */
+    for (int i = 1; i < n; i++) {
+        Player key = sorted[i];
+        int j = i - 1;
+        while (j >= 0 &&
+               (sorted[j].score < key.score ||
+                (sorted[j].score == key.score && strcmp(sorted[j].name, key.name) > 0))) {
+            sorted[j + 1] = sorted[j];
+            j--;
+        }
+        sorted[j + 1] = key;
+    }
+
+    size_t pos = 0;
+    for (int i = 0; i < n; i++) {
+        int w = snprintf(out + pos, cap - pos, "%s%s:%d",
+                         (i > 0) ? "," : "", sorted[i].name, sorted[i].score);
+        if (w < 0 || pos + (size_t)w >= cap) {
+            break; /* GCOVR_EXCL_LINE */
+        }
+        pos += (size_t)w;
+    }
+}
+
+static void reset_room_to_lobby(Room *r)
+{
+    r->state = ROOM_LOBBY;
+    r->round = 0;
+    memset(r->order, 0, sizeof(r->order));
+    r->order_n = 0;
+    r->order_pos = 0;
+    memset(r->drawer, 0, sizeof(r->drawer));
+    memset(r->options, 0, sizeof(r->options));
+    memset(r->word, 0, sizeof(r->word));
+    r->guessed_count = 0;
+    r->turn_guess_total = 0;
+    r->phase_deadline_ms = 0;
+    r->next_tick_ms = 0;
+
+    for (int i = 0; i < r->nplayers; i++) {
+        r->players[i].score = 0;
+        r->players[i].guessed = false;
+        r->players[i].turn_delta = 0;
+    }
+}
+
+void game_end_game(struct Server *s, Room *r, GameEndReason reason)
+{
+    if (!s || !r || r->state == ROOM_LOBBY) {
+        return;
+    }
+
+    char ranking[RANKING_BUF_SIZE];
+    game_format_ranking(r, ranking, sizeof(ranking));
+
+    char ev[MAX_LINE];
+    (void)snprintf(ev, sizeof(ev), "GAME_END|%s|%s",
+                   game_end_reason_str(reason), ranking);
+    room_broadcast(s, r, ev, CONN_ID_NONE);
+
+    reset_room_to_lobby(r);
+
+    for (int i = 0; i < r->nplayers; i++) {
+        Conn *pc = conn_get(&s->conns, r->players[i].conn);
+        if (pc && !pc->closing) {
+            room_send_info(s, r, pc);
+        }
+    }
+}
+
 static void enter_choosing(struct Server *s, Room *r,
                            const char picked[3][WORD_MAX], int64_t now_ms)
 {
@@ -77,7 +184,7 @@ static void enter_choosing(struct Server *s, Room *r,
         (void)snprintf(r->options[i], sizeof(r->options[i]), "%s", picked[i]);
     }
     r->state = ROOM_CHOOSING;
-    r->word[0] = '\0';
+    memset(r->word, 0, sizeof(r->word));
     r->guessed_count = 0;
     r->turn_guess_total = 0;
     for (int i = 0; i < r->nplayers; i++) {
@@ -85,6 +192,7 @@ static void enter_choosing(struct Server *s, Room *r,
         r->players[i].turn_delta = 0;
     }
     r->phase_deadline_ms = now_ms + (int64_t)s->cfg.choose_time_s * 1000;
+    r->next_tick_ms = 0;
 
     char ev[128];
     (void)snprintf(ev, sizeof(ev), "TURN_START|%d|%s|%d",
@@ -133,6 +241,57 @@ void game_begin_drawing(struct Server *s, Room *r, int choice_idx, int64_t now_m
     }
 }
 
+void game_end_turn(struct Server *s, Room *r, TurnEndReason reason, int64_t now_ms)
+{
+    if (!s || !r) {
+        return;
+    }
+    if (reason == TURN_END_DRAWER_LEFT) {
+        if (r->state != ROOM_DRAWING && r->state != ROOM_CHOOSING) {
+            return;
+        }
+    } else {
+        if (r->state != ROOM_DRAWING) {
+            return;
+        }
+    }
+
+    if (reason != TURN_END_DRAWER_LEFT) {
+        int didx = find_player_idx(r, r->drawer);
+        if (didx >= 0) {
+            int dpts = scoring_drawer(r->turn_guess_total, r->nplayers);
+            r->players[didx].turn_delta = dpts;
+            r->players[didx].score += dpts;
+        }
+    }
+
+    char scores[SCORES_BUF_SIZE];
+    size_t pos = 0;
+    scores[0] = '\0';
+    for (int i = 0; i < r->nplayers; i++) {
+        int w = snprintf(scores + pos, sizeof(scores) - pos, "%s%s:%d:%d",
+                         (i > 0) ? "," : "",
+                         r->players[i].name,
+                         r->players[i].score,
+                         r->players[i].turn_delta);
+        if (w < 0 || pos + (size_t)w >= sizeof(scores)) {
+            break; /* GCOVR_EXCL_LINE */
+        }
+        pos += (size_t)w;
+    }
+
+    char ev[MAX_LINE];
+    (void)snprintf(ev, sizeof(ev), "TURN_END|%s|%s|%s",
+                   turn_end_reason_str(reason),
+                   r->word,
+                   scores);
+    room_broadcast(s, r, ev, CONN_ID_NONE);
+
+    r->state = ROOM_TURN_END;
+    r->phase_deadline_ms = now_ms + (int64_t)s->cfg.turn_pause_s * 1000;
+    r->next_tick_ms = 0;
+}
+
 void h_start(struct Server *s, Conn *c, const Command *cmd)
 {
     (void)cmd;
@@ -142,7 +301,6 @@ void h_start(struct Server *s, Conn *c, const Command *cmd)
         return;                           /* GCOVR_EXCL_LINE */
     }
 
-    /* Check host by ConnId (with generation) */
     if (r->nplayers < 1 ||
         r->players[0].conn.idx != c->idx ||
         r->players[0].conn.gen != c->gen) {
@@ -155,7 +313,6 @@ void h_start(struct Server *s, Conn *c, const Command *cmd)
         return;
     }
 
-    /* Pick words BEFORE mutating room state or sending OK */
     char picked[3][WORD_MAX];
     if (!words_pick3(&s->words, &s->rng, picked)) {
         reply_err(s, c, ERR_INTERNAL);
@@ -164,12 +321,7 @@ void h_start(struct Server *s, Conn *c, const Command *cmd)
 
     reply_ok(s, c, NULL);
 
-    for (int i = 0; i < r->nplayers; i++) {
-        r->players[i].score = 0;
-        r->players[i].guessed = false;
-        r->players[i].turn_delta = 0;
-    }
-
+    reset_room_to_lobby(r);
     r->round = 1;
     snapshot_round_order(r);
     (void)game_next_drawer(s, r);
@@ -200,13 +352,11 @@ void h_choose_word(struct Server *s, Conn *c, const Command *cmd)
         return;                           /* GCOVR_EXCL_LINE */
     }
 
-    /* Step 5: Role check (drawer only) */
     if (strcmp(c->user, r->drawer) != 0) {
         reply_err(s, c, ERR_NOT_DRAWER);
         return;
     }
 
-    /* Step 6: Choice value check (1..3) */
     int idx = 0;
     (void)protocol_parse_int(cmd->argv[0], &idx);
     if (idx < 1 || idx > 3) {
@@ -232,7 +382,6 @@ void h_guess(struct Server *s, Conn *c, const Command *cmd)
         return;                           /* GCOVR_EXCL_LINE */
     }
 
-    /* Step 5: Drawer cannot guess (302), already guessed cannot guess again (303) */
     if (strcmp(c->user, r->drawer) == 0) {
         reply_err(s, c, ERR_IS_DRAWER);
         return;
@@ -274,6 +423,24 @@ void h_guess(struct Server *s, Conn *c, const Command *cmd)
     char ev[128];
     (void)snprintf(ev, sizeof(ev), "GUESS_CORRECT|%s|%d", c->user, pts);
     room_broadcast(s, r, ev, CONN_ID_NONE);
+
+    if (game_all_guessed(r)) {
+        game_end_turn(s, r, TURN_END_ALL_GUESSED, now_ms);
+    }
+}
+
+void h_scoreboard(struct Server *s, Conn *c, const Command *cmd)
+{
+    (void)cmd;
+    Room *r = room_find(s, c->room_id);
+    if (!r) {
+        reply_err(s, c, ERR_NOT_IN_ROOM); /* GCOVR_EXCL_LINE */
+        return;                           /* GCOVR_EXCL_LINE */
+    }
+
+    char ranking[RANKING_BUF_SIZE];
+    game_format_ranking(r, ranking, sizeof(ranking));
+    reply_ok(s, c, ranking);
 }
 
 void game_on_player_left(struct Server *s, Room *r, const char *left_user, bool was_drawer)
@@ -284,19 +451,12 @@ void game_on_player_left(struct Server *s, Room *r, const char *left_user, bool 
     }
 
     if (r->nplayers < 2) {
-        r->state = ROOM_LOBBY;
-        r->drawer[0] = '\0';
+        game_end_game(s, r, GAME_END_NOT_ENOUGH_PLAYERS);
         return;
     }
 
-    if (was_drawer) {
-        r->order_pos++;
-        char picked[3][WORD_MAX];
-        if (game_next_drawer(s, r) && words_pick3(&s->words, &s->rng, picked)) {
-            enter_choosing(s, r, picked, clock_now_ms(&s->clock));
-        } else {
-            r->state = ROOM_LOBBY;
-        }
+    if (was_drawer && (r->state == ROOM_CHOOSING || r->state == ROOM_DRAWING)) {
+        game_end_turn(s, r, TURN_END_DRAWER_LEFT, clock_now_ms(&s->clock));
     }
 }
 
@@ -310,8 +470,11 @@ static void tick_choosing(struct Server *s, Room *r, int64_t now_ms)
 
 static void tick_drawing(struct Server *s, Room *r, int64_t now_ms)
 {
-    /* Note: TIMEUP turn transition is added in the turn-end task; do not emit TIME|0 at deadline. */
-    if (now_ms >= r->phase_deadline_ms || now_ms < r->next_tick_ms) {
+    if (now_ms >= r->phase_deadline_ms) {
+        game_end_turn(s, r, TURN_END_TIMEUP, now_ms);
+        return;
+    }
+    if (now_ms < r->next_tick_ms) {
         return;
     }
 
@@ -332,6 +495,33 @@ static void tick_drawing(struct Server *s, Room *r, int64_t now_ms)
     }
 }
 
+static void tick_turn_end(struct Server *s, Room *r, int64_t now_ms)
+{
+    if (now_ms < r->phase_deadline_ms) {
+        return;
+    }
+
+    if (r->nplayers < 2) {
+        game_end_game(s, r, GAME_END_NOT_ENOUGH_PLAYERS);
+        return;
+    }
+
+    if (!game_next_drawer(s, r)) {
+        game_end_game(s, r, GAME_END_FINISHED);
+        return;
+    }
+
+    char picked[3][WORD_MAX];
+    if (!words_pick3(&s->words, &s->rng, picked)) {
+        logger_log(&s->log, LOG_ERROR, now_ms,
+                   "sid=- room=%d event=WORD_PICK_FAIL", r->id);
+        game_end_game(s, r, GAME_END_FINISHED);
+        return;
+    }
+
+    enter_choosing(s, r, picked, now_ms);
+}
+
 void game_tick(struct Server *s, int64_t now_ms)
 {
     if (!s) {
@@ -349,8 +539,10 @@ void game_tick(struct Server *s, int64_t now_ms)
         case ROOM_DRAWING:
             tick_drawing(s, r, now_ms);
             break;
-        case ROOM_LOBBY:
         case ROOM_TURN_END:
+            tick_turn_end(s, r, now_ms);
+            break;
+        case ROOM_LOBBY:
         default:
             break;
         }

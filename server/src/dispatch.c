@@ -23,7 +23,7 @@ static const CmdSpec CMD_SPECS[] = {
     { CMD_JOIN_ROOM,   INT_ARG_0,     false, AUTH_REQUIRED,   ROOM_OUT_ONLY, RSTATE_NONE,     h_join_room   },
     { CMD_LEAVE_ROOM,  INT_ARG_NONE,  false, AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      h_leave_room  },
     { CMD_START,       INT_ARG_NONE,  false, AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_LOBBY,    h_start       },
-    { CMD_SCOREBOARD,  INT_ARG_NONE,  false, AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      NULL          },
+    { CMD_SCOREBOARD,  INT_ARG_NONE,  false, AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      h_scoreboard  },
     { CMD_CHOOSE_WORD, INT_ARG_0,     false, AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_CHOOSING, h_choose_word },
     { CMD_STROKE,      INT_ARG_1,     false, AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  h_stroke      },
     { CMD_CLEAR,       INT_ARG_NONE,  false, AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  h_clear       },

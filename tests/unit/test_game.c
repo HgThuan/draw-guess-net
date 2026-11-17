@@ -293,19 +293,28 @@ static void test_game_time_ticks_schedule_and_isolation(void **state)
         server_tick(&s_srv, now);
 
         if (a1->out_len > 0) {
-            char exp[32];
-            (void)snprintf(exp, sizeof(exp), "TIME|%d\n", 60 - step * 5);
-            assert_string_equal(a1->out, exp);
-            assert_string_equal(a2->out, exp);
-            count_r1++;
+            if (strncmp(a1->out, "TIME|", 5) == 0) {
+                char exp[32];
+                (void)snprintf(exp, sizeof(exp), "TIME|%d\n", 60 - step * 5);
+                assert_string_equal(a1->out, exp);
+                assert_string_equal(a2->out, exp);
+                count_r1++;
+            } else {
+                assert_int_equal(step, 12);
+                assert_non_null(strstr(a1->out, "TURN_END|TIMEUP|"));
+            }
             clear_out(a1);
             clear_out(a2);
         }
         if (b1->out_len > 0) {
-            char exp[32];
-            (void)snprintf(exp, sizeof(exp), "TIME|%d\n", 33 - step * 5);
-            assert_string_equal(b1->out, exp);
-            count_r2++;
+            if (step < 7) {
+                char exp[32];
+                (void)snprintf(exp, sizeof(exp), "TIME|%d\n", 33 - step * 5);
+                assert_string_equal(b1->out, exp);
+                count_r2++;
+            } else if (step == 7) {
+                assert_non_null(strstr(b1->out, "TURN_END|TIMEUP|"));
+            }
             clear_out(b1);
             clear_out(b2);
         }
@@ -346,8 +355,12 @@ static void test_game_drawer_leaves_during_choosing(void **state)
     clear_out(c2);
     clear_out(c3);
 
-    /* Drawer (alice) leaves during ROOM_CHOOSING -> bob becomes drawer, no crash on tick */
+    /* Drawer (alice) leaves during ROOM_CHOOSING -> enters ROOM_TURN_END, then after 5s bob becomes drawer */
     dispatch_line(&s_srv, c1, "LEAVE_ROOM");
+    assert_int_equal(s_srv.rooms[0].state, ROOM_TURN_END);
+    clock_advance(&s_srv.clock, 5000);
+    server_tick(&s_srv, clock_now_ms(&s_srv.clock));
+    assert_int_equal(s_srv.rooms[0].state, ROOM_CHOOSING);
     assert_string_equal(s_srv.rooms[0].drawer, "bob");
     clock_advance(&s_srv.clock, 15000);
     server_tick(&s_srv, clock_now_ms(&s_srv.clock));
@@ -630,10 +643,16 @@ static void test_game_guess_scoring_and_deadline_bounds(void **state)
     assert_non_null(strstr(a3->out, "ERR|303|"));
     clear_out(a3);
 
-    /* Advance 2 ms to 15001 ms elapsed (rem_ms = 44999 -> remaining_s = 44): frank in Room 2 gets 393 pts */
+    /* Advance 2 ms to 15001 ms elapsed (rem_ms = 44999 -> remaining_s = 44): frank in Room 2 gets 393 pts (and ends turn since 2 players) */
     clock_advance(&s_srv.clock, 2);
     dispatch_line(&s_srv, b2, "GUESS|cat");
-    assert_string_equal(b2->out, "OK|CORRECT|393\nGUESS_CORRECT|frank|393\n");
+    assert_true(strncmp(b2->out, "OK|CORRECT|393\nGUESS_CORRECT|frank|393\nTURN_END|ALL_GUESSED|cat|", 64) == 0);
+    clear_out(b1);
+    clear_out(b2);
+
+    /* Reset Room 2 back to ROOM_DRAWING with unguessed frank so we can test 60000 ms deadline */
+    s_srv.rooms[1].state = ROOM_CHOOSING;
+    game_begin_drawing(&s_srv, &s_srv.rooms[1], 0, 1000);
     clear_out(b1);
     clear_out(b2);
 
@@ -647,7 +666,7 @@ static void test_game_guess_scoring_and_deadline_bounds(void **state)
     clear_out(a3);
     clear_out(a4);
 
-    /* Advance to 59999 ms elapsed (rem_ms = 1 -> remaining_s = 0): STROKE/CLEAR/GUESS still accepted, dave (k=3) gets 50 pts */
+    /* Advance to 59999 ms elapsed (rem_ms = 1 -> remaining_s = 0): STROKE/CLEAR/GUESS still accepted */
     clock_advance(&s_srv.clock, 29999);
     dispatch_line(&s_srv, a1, "CLEAR");
     assert_string_equal(a2->out, "CLEAR\n");
@@ -655,16 +674,7 @@ static void test_game_guess_scoring_and_deadline_bounds(void **state)
     clear_out(a3);
     clear_out(a4);
 
-    dispatch_line(&s_srv, a4, "GUESS|cat");
-    assert_string_equal(a4->out, "OK|CORRECT|50\nGUESS_CORRECT|dave|50\n");
-    assert_int_equal(s_srv.rooms[0].turn_guess_total, 725);
-    assert_true(game_all_guessed(&s_srv.rooms[0]));
-    clear_out(a1);
-    clear_out(a2);
-    clear_out(a3);
-    clear_out(a4);
-
-    /* Advance 1 ms to 60000 ms (now_ms == phase_deadline_ms): STROKE, CLEAR, GUESS all return 300 */
+    /* Advance 1 ms to 60000 ms (now_ms == phase_deadline_ms): STROKE, CLEAR, GUESS all return 300 before tick */
     clock_advance(&s_srv.clock, 1);
     dispatch_line(&s_srv, a1, "STROKE|FF0000|4|0,0,10,10");
     assert_non_null(strstr(a1->out, "ERR|300|"));
@@ -673,6 +683,10 @@ static void test_game_guess_scoring_and_deadline_bounds(void **state)
     dispatch_line(&s_srv, a1, "CLEAR");
     assert_non_null(strstr(a1->out, "ERR|300|"));
     clear_out(a1);
+
+    dispatch_line(&s_srv, a4, "GUESS|cat");
+    assert_non_null(strstr(a4->out, "ERR|300|"));
+    clear_out(a4);
 
     dispatch_line(&s_srv, b2, "GUESS|cat");
     assert_non_null(strstr(b2->out, "ERR|300|"));
@@ -715,6 +729,275 @@ static void test_game_all_guessed_cases(void **state)
     assert_false(game_all_guessed(&r));
 }
 
+static void test_game_turn_end_all_guessed_timeup_and_idempotence(void **state)
+{
+    Conn *c1;
+    Conn *c2;
+    Conn *c3;
+    (void)state;
+
+    init_test_server();
+    c1 = make_user("alice");
+    c2 = make_user("bob");
+    c3 = make_user("carol");
+
+    dispatch_line(&s_srv, c1, "CREATE_ROOM|R1|3|2|60");
+    dispatch_line(&s_srv, c2, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, c3, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, c1, "START");
+    Room *r = &s_srv.rooms[0];
+    (void)snprintf(r->options[0], sizeof(r->options[0]), "cat");
+    dispatch_line(&s_srv, c1, "CHOOSE_WORD|1");
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    /* carol guesses at remaining=45s (400 pts), bob guesses at remaining=30s (275 pts) */
+    clock_advance(&s_srv.clock, 15000);
+    dispatch_line(&s_srv, c3, "GUESS|cat");
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    clock_advance(&s_srv.clock, 15000);
+    dispatch_line(&s_srv, c2, "GUESS|cat");
+    assert_string_equal(
+        c2->out,
+        "OK|CORRECT|275\n"
+        "GUESS_CORRECT|bob|275\n"
+        "TURN_END|ALL_GUESSED|cat|alice:337:337,bob:275:275,carol:400:400\n"
+    );
+    assert_string_equal(
+        c1->out,
+        "GUESS_CORRECT|bob|275\n"
+        "TURN_END|ALL_GUESSED|cat|alice:337:337,bob:275:275,carol:400:400\n"
+    );
+    assert_int_equal(r->state, ROOM_TURN_END);
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    /* Calling game_end_turn again in ROOM_TURN_END is idempotent (no-op) */
+    game_end_turn(&s_srv, r, TURN_END_ALL_GUESSED, clock_now_ms(&s_srv.clock));
+    assert_int_equal(c1->out_len, 0);
+    assert_int_equal(r->players[0].score, 337);
+
+    /* Commands during ROOM_TURN_END pause: GUESS, STROKE, CLEAR, CHOOSE_WORD -> 300 */
+    dispatch_line(&s_srv, c2, "GUESS|cat");
+    assert_non_null(strstr(c2->out, "ERR|300|"));
+    clear_out(c2);
+
+    dispatch_line(&s_srv, c1, "STROKE|FF0000|4|0,0,10,10");
+    assert_non_null(strstr(c1->out, "ERR|300|"));
+    clear_out(c1);
+
+    dispatch_line(&s_srv, c1, "CLEAR");
+    assert_non_null(strstr(c1->out, "ERR|300|"));
+    clear_out(c1);
+
+    dispatch_line(&s_srv, c1, "CHOOSE_WORD|1");
+    assert_non_null(strstr(c1->out, "ERR|300|"));
+    clear_out(c1);
+
+    /* After 5000 ms pause: enters Turn 2 (round 1, drawer bob), word is cleared */
+    clock_advance(&s_srv.clock, 5000);
+    server_tick(&s_srv, clock_now_ms(&s_srv.clock));
+    assert_int_equal(r->state, ROOM_CHOOSING);
+    assert_string_equal(r->drawer, "bob");
+    assert_string_equal(r->word, "");
+    (void)snprintf(r->options[0], sizeof(r->options[0]), "house");
+    dispatch_line(&s_srv, c2, "CHOOSE_WORD|1");
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    /* TIMEUP boundary: at 59999 ms elapsed, still ROOM_DRAWING; at 60000 ms, TURN_END|TIMEUP */
+    clock_advance(&s_srv.clock, 59999);
+    server_tick(&s_srv, clock_now_ms(&s_srv.clock));
+    assert_int_equal(r->state, ROOM_DRAWING);
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    clock_advance(&s_srv.clock, 1);
+    server_tick(&s_srv, clock_now_ms(&s_srv.clock));
+    assert_int_equal(r->state, ROOM_TURN_END);
+    assert_string_equal(
+        c1->out,
+        "TURN_END|TIMEUP|house|alice:337:0,bob:275:0,carol:400:0\n"
+    );
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    /* 1-hour jump during ROOM_DRAWING only ends ONE turn */
+    clock_advance(&s_srv.clock, 5000);
+    server_tick(&s_srv, clock_now_ms(&s_srv.clock));
+    assert_int_equal(r->state, ROOM_CHOOSING);
+    dispatch_line(&s_srv, c3, "CHOOSE_WORD|1");
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    clock_advance(&s_srv.clock, 3600000);
+    game_tick(&s_srv, clock_now_ms(&s_srv.clock));
+    assert_int_equal(r->state, ROOM_TURN_END);
+    assert_non_null(strstr(c1->out, "TURN_END|TIMEUP|"));
+    assert_null(strstr(c1->out, "TURN_START|"));
+}
+
+static void test_game_full_rotation_2_rounds_3_players_and_two_games(void **state)
+{
+    Conn *c[3];
+    const char *expected_drawer[6] = { "alice", "bob", "carol", "alice", "bob", "carol" };
+    const int expected_round[6]    = { 1, 1, 1, 2, 2, 2 };
+    (void)state;
+
+    init_test_server();
+    c[0] = make_user("alice");
+    c[1] = make_user("bob");
+    c[2] = make_user("carol");
+
+    dispatch_line(&s_srv, c[0], "CREATE_ROOM|Phong Vui|3|2|60");
+    dispatch_line(&s_srv, c[1], "JOIN_ROOM|1");
+    dispatch_line(&s_srv, c[2], "JOIN_ROOM|1");
+    clear_out(c[0]);
+    clear_out(c[1]);
+    clear_out(c[2]);
+
+    /* Play 2 full consecutive games in the same room */
+    for (int g = 0; g < 2; g++) {
+        dispatch_line(&s_srv, c[0], "START");
+        Room *r = &s_srv.rooms[0];
+
+        for (int turn = 0; turn < 6; turn++) {
+            int d_idx = turn % 3;
+            assert_int_equal(r->state, ROOM_CHOOSING);
+            assert_int_equal(r->round, expected_round[turn]);
+            assert_string_equal(r->drawer, expected_drawer[turn]);
+
+            char exp_ts[64];
+            (void)snprintf(exp_ts, sizeof(exp_ts), "TURN_START|%d|%s|15\n",
+                           expected_round[turn], expected_drawer[turn]);
+            assert_non_null(strstr(c[0]->out, exp_ts));
+
+            for (int k = 0; k < 3; k++) {
+                clear_out(c[k]);
+            }
+
+            (void)snprintf(r->options[0], sizeof(r->options[0]), "cat");
+            dispatch_line(&s_srv, c[d_idx], "CHOOSE_WORD|1");
+            for (int k = 0; k < 3; k++) {
+                clear_out(c[k]);
+            }
+
+            /* Both non-drawers guess "cat" without getting 303 */
+            for (int k = 0; k < 3; k++) {
+                if (k == d_idx) {
+                    continue;
+                }
+                dispatch_line(&s_srv, c[k], "GUESS|cat");
+                assert_non_null(strstr(c[k]->out, "OK|CORRECT|"));
+            }
+            assert_int_equal(r->state, ROOM_TURN_END);
+            for (int k = 0; k < 3; k++) {
+                clear_out(c[k]);
+            }
+
+            clock_advance(&s_srv.clock, 5000);
+            server_tick(&s_srv, clock_now_ms(&s_srv.clock));
+        }
+
+        /* After 6th turn pause: GAME_END|FINISHED + ROOM_INFO in LOBBY + reset to 0 */
+        assert_int_equal(r->state, ROOM_LOBBY);
+        assert_int_equal(r->round, 0);
+        assert_string_equal(r->drawer, "");
+        assert_string_equal(r->word, "");
+        for (int k = 0; k < 3; k++) {
+            assert_int_equal(r->players[k].score, 0);
+            assert_false(r->players[k].guessed);
+            assert_int_equal(r->players[k].turn_delta, 0);
+            assert_non_null(strstr(c[k]->out, "GAME_END|FINISHED|"));
+            assert_non_null(strstr(c[k]->out, "ROOM_INFO|1|Phong Vui|alice|3|2|60|LOBBY|alice,bob,carol\n"));
+            clear_out(c[k]);
+        }
+    }
+}
+
+static void test_game_scoreboard_and_ranking_edge_cases(void **state)
+{
+    Conn *c1;
+    Conn *c2;
+    Conn *c3;
+    Conn *unauth;
+    (void)state;
+
+    init_test_server();
+    unauth = conn_alloc(&s_srv.conns, -1, 1000);
+    c1 = make_user("alice");
+    c2 = make_user("Bob");
+    c3 = make_user("carol");
+
+    /* Unauthenticated -> 101; outside room -> 204 */
+    dispatch_line(&s_srv, unauth, "SCOREBOARD");
+    assert_non_null(strstr(unauth->out, "ERR|101|"));
+    clear_out(unauth);
+
+    dispatch_line(&s_srv, c1, "SCOREBOARD");
+    assert_non_null(strstr(c1->out, "ERR|204|"));
+    clear_out(c1);
+
+    dispatch_line(&s_srv, c1, "CREATE_ROOM|R1|8|2|60");
+    dispatch_line(&s_srv, c2, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, c3, "JOIN_ROOM|1");
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    /* In LOBBY (all 0): ASCII tie-break puts "Bob" before "alice" before "carol" */
+    dispatch_line(&s_srv, c1, "SCOREBOARD");
+    assert_string_equal(c1->out, "OK|Bob:0,alice:0,carol:0\n");
+    clear_out(c1);
+
+    /* Start turn: Bob guesses (500) then leaves room, carol guesses (475) -> nplayers=2 at turn end so alice gets (500+475)/1 = 975 */
+    dispatch_line(&s_srv, c1, "START");
+    Room *r = &s_srv.rooms[0];
+    (void)snprintf(r->options[0], sizeof(r->options[0]), "cat");
+    dispatch_line(&s_srv, c1, "CHOOSE_WORD|1");
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    dispatch_line(&s_srv, c2, "GUESS|cat");
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    /* Mid-turn SCOREBOARD */
+    dispatch_line(&s_srv, c1, "SCOREBOARD");
+    assert_string_equal(c1->out, "OK|Bob:500,alice:0,carol:0\n");
+    clear_out(c1);
+
+    /* Bob leaves room -> excluded from ranking */
+    dispatch_line(&s_srv, c2, "LEAVE_ROOM");
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    dispatch_line(&s_srv, c3, "GUESS|cat");
+    assert_non_null(strstr(c1->out, "TURN_END|ALL_GUESSED|cat|alice:975:975,carol:475:475\n"));
+    clear_out(c1);
+    clear_out(c3);
+
+    dispatch_line(&s_srv, c1, "SCOREBOARD");
+    assert_string_equal(c1->out, "OK|alice:975,carol:475\n");
+    clear_out(c1);
+
+    game_format_ranking(NULL, NULL, 0);
+    game_end_game(NULL, NULL, GAME_END_FINISHED);
+    game_end_turn(NULL, NULL, TURN_END_TIMEUP, 0);
+}
+
 int run_game_tests(void)
 {
     const struct CMUnitTest tests[] = {
@@ -726,6 +1009,9 @@ int run_game_tests(void)
         cmocka_unit_test(test_game_stroke_and_clear_validation_and_forwarding),
         cmocka_unit_test(test_game_guess_scoring_and_deadline_bounds),
         cmocka_unit_test(test_game_all_guessed_cases),
+        cmocka_unit_test(test_game_turn_end_all_guessed_timeup_and_idempotence),
+        cmocka_unit_test(test_game_full_rotation_2_rounds_3_players_and_two_games),
+        cmocka_unit_test(test_game_scoreboard_and_ranking_edge_cases),
     };
     return cmocka_run_group_tests_name("game", tests, NULL, NULL);
 }
