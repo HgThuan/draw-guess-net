@@ -1,5 +1,6 @@
 #include "room.h"
 #include "dispatch.h"
+#include "game.h"
 #include "server.h"
 #include <stdio.h>
 #include <string.h>
@@ -262,6 +263,7 @@ void room_leave(struct Server *s, Conn *c, const char *reason)
 
     char left_name[NAME_MAX_LEN + 1];
     memcpy(left_name, r->players[pidx].name, sizeof(left_name));
+    bool was_drawer = (r->state != ROOM_LOBBY && strcmp(r->drawer, left_name) == 0);
 
     if (pidx + 1 < r->nplayers) {
         memmove(&r->players[pidx], &r->players[pidx + 1],
@@ -282,6 +284,10 @@ void room_leave(struct Server *s, Conn *c, const char *reason)
     if (pidx == 0) {
         (void)snprintf(ev, sizeof(ev), "HOST_CHANGED|%s", r->players[0].name);
         room_broadcast(s, r, ev, -1);
+    }
+
+    if (r->state != ROOM_LOBBY) {
+        game_on_player_left(s, r, left_name, was_drawer);
     }
 }
 
