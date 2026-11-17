@@ -292,7 +292,7 @@ static void test_room_leave_host_transfer_and_deletion(void **state)
     room_table_init(NULL);
     assert_null(room_find(NULL, 1));
     assert_null(room_find(&s_srv, 0));
-    room_broadcast(NULL, NULL, NULL, -1);
+    room_broadcast(NULL, NULL, NULL, CONN_ID_NONE);
     room_send_info(NULL, NULL, NULL);
     room_leave(NULL, NULL, NULL);
 }

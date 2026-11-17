@@ -47,9 +47,11 @@ typedef struct {
     int64_t   next_tick_ms;
 } Room;
 
+#define CONN_ID_NONE ((ConnId){ CONN_IDX_NONE, 0u })
+
 void  room_table_init(struct Server *s);
 Room *room_find(struct Server *s, int room_id);
-void  room_broadcast(struct Server *s, const Room *r, const char *line, int exclude_idx);
+void  room_broadcast(struct Server *s, const Room *r, const char *line, ConnId exclude);
 void  room_send_info(struct Server *s, const Room *r, Conn *c);
 void  room_leave(struct Server *s, Conn *c, const char *reason);
 
