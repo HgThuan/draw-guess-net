@@ -9,6 +9,7 @@
 #include "dispatch.h"
 #include "draw.h"
 #include "game.h"
+#include "session.h"
 
 static Server s_srv;
 
@@ -996,6 +997,289 @@ static void test_game_scoreboard_and_ranking_edge_cases(void **state)
     game_format_ranking(NULL, NULL, 0);
     game_end_game(NULL, NULL, GAME_END_FINISHED);
     game_end_turn(NULL, NULL, TURN_END_TIMEUP, 0);
+    assert_false(game_is_current_drawer(NULL, "alice"));
+    assert_false(game_is_current_drawer(r, NULL));
+    assert_false(game_is_current_drawer(r, ""));
+}
+
+static void test_game_player_leaves_drawer_guesser_and_turn_end(void **state)
+{
+    Conn *c1;
+    Conn *c2;
+    Conn *c3;
+    Conn *c4;
+    (void)state;
+
+    init_test_server();
+    c1 = make_user("alice");
+    c2 = make_user("bob");
+    c3 = make_user("carol");
+    c4 = make_user("dave");
+
+    dispatch_line(&s_srv, c1, "CREATE_ROOM|R1|4|2|60");
+    dispatch_line(&s_srv, c2, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, c3, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, c4, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, c1, "START");
+
+    Room *r = &s_srv.rooms[0];
+    (void)snprintf(r->options[0], sizeof(r->options[0]), "cat");
+    dispatch_line(&s_srv, c1, "CHOOSE_WORD|1");
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+    clear_out(c4);
+
+    /* bob guesses at 45s remaining -> k=1, 400 pts */
+    clock_advance(&s_srv.clock, 15000);
+    dispatch_line(&s_srv, c2, "GUESS|cat");
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+    clear_out(c4);
+
+    /* bob (already guessed) leaves via LEAVE_ROOM:
+     * - bob's out has ONLY "OK\n" (does not receive PLAYER_LEFT of himself)
+     * - turn continues because carol and dave have not guessed yet */
+    dispatch_line(&s_srv, c2, "LEAVE_ROOM");
+    assert_string_equal(c2->out, "OK\n");
+    assert_string_equal(c1->out, "PLAYER_LEFT|bob|LEAVE\n");
+    assert_int_equal(r->state, ROOM_DRAWING);
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+    clear_out(c4);
+
+    /* carol guesses at 30s remaining -> ordinal k=2 (bob's guess still counts in guessed_count), gets 275 pts */
+    clock_advance(&s_srv.clock, 15000);
+    dispatch_line(&s_srv, c3, "GUESS|cat");
+    assert_string_equal(c3->out, "OK|CORRECT|275\nGUESS_CORRECT|carol|275\n");
+    assert_int_equal(r->state, ROOM_DRAWING);
+    clear_out(c1);
+    clear_out(c3);
+    clear_out(c4);
+
+    /* dave (the last unguessed guesser) leaves -> remaining guessers (carol) have all guessed!
+     * Immediately triggers TURN_END|ALL_GUESSED; alice's drawer score = (400 + 275) / (2 - 1) = 675 */
+    dispatch_line(&s_srv, c4, "LEAVE_ROOM");
+    assert_string_equal(c4->out, "OK\n");
+    assert_string_equal(
+        c1->out,
+        "PLAYER_LEFT|dave|LEAVE\n"
+        "TURN_END|ALL_GUESSED|cat|alice:675:675,carol:275:275\n"
+    );
+    assert_int_equal(r->state, ROOM_TURN_END);
+    int64_t saved_deadline = r->phase_deadline_ms;
+    clear_out(c1);
+    clear_out(c3);
+    clear_out(c4);
+
+    /* Add a fresh room to test drawer leaving during ROOM_TURN_END and Turn 2 ROOM_CHOOSING */
+    Conn *u1 = make_user("dan");
+    Conn *u2 = make_user("eve");
+    Conn *u3 = make_user("fin");
+    Conn *u4 = make_user("gus");
+    dispatch_line(&s_srv, u1, "CREATE_ROOM|R2|4|2|60");
+    dispatch_line(&s_srv, u2, "JOIN_ROOM|2");
+    dispatch_line(&s_srv, u3, "JOIN_ROOM|2");
+    dispatch_line(&s_srv, u4, "JOIN_ROOM|2");
+    dispatch_line(&s_srv, u1, "START");
+
+    Room *r2 = &s_srv.rooms[1];
+    (void)snprintf(r2->options[0], sizeof(r2->options[0]), "cat");
+    dispatch_line(&s_srv, u1, "CHOOSE_WORD|1");
+    dispatch_line(&s_srv, u2, "GUESS|cat");
+    dispatch_line(&s_srv, u3, "GUESS|cat");
+    dispatch_line(&s_srv, u4, "GUESS|cat");
+    assert_int_equal(r2->state, ROOM_TURN_END);
+    saved_deadline = r2->phase_deadline_ms;
+    clear_out(u1);
+    clear_out(u2);
+    clear_out(u3);
+    clear_out(u4);
+
+    /* dan (Turn 1 drawer & host) leaves during ROOM_TURN_END:
+     * - game_is_current_drawer is false in ROOM_TURN_END
+     * - no second TURN_END emitted
+     * - pause deadline preserved */
+    clock_advance(&s_srv.clock, 2000);
+    assert_false(game_is_current_drawer(r2, "dan"));
+    dispatch_line(&s_srv, u1, "LEAVE_ROOM");
+    assert_string_equal(u1->out, "OK\n");
+    assert_string_equal(u2->out, "PLAYER_LEFT|dan|LEAVE\nHOST_CHANGED|eve\n");
+    assert_null(strstr(u2->out, "TURN_END|"));
+    assert_int_equal(r2->state, ROOM_TURN_END);
+    assert_int_equal(r2->phase_deadline_ms, saved_deadline);
+    clear_out(u1);
+    clear_out(u2);
+    clear_out(u3);
+    clear_out(u4);
+
+    /* Remaining 3000 ms of pause expires -> Turn 2 starts in ROOM_CHOOSING with drawer eve */
+    clock_advance(&s_srv.clock, 3000);
+    game_tick(&s_srv, clock_now_ms(&s_srv.clock));
+    assert_int_equal(r2->state, ROOM_CHOOSING);
+    assert_string_equal(r2->drawer, "eve");
+    assert_string_equal(r2->word, "");
+    clear_out(u2);
+    clear_out(u3);
+    clear_out(u4);
+
+    /* In Turn 2 ROOM_CHOOSING, drawer eve disconnects:
+     * - word field in TURN_END|DRAWER_LEFT||... MUST be empty (not leaking Turn 1's "cat") */
+    session_on_disconnect(&s_srv, u2);
+    assert_string_equal(
+        u3->out,
+        "PLAYER_LEFT|eve|DISCONNECT\n"
+        "HOST_CHANGED|fin\n"
+        "TURN_END|DRAWER_LEFT||fin:475:0,gus:450:0\n"
+    );
+    assert_int_equal(r2->state, ROOM_TURN_END);
+    clear_out(u3);
+    clear_out(u4);
+
+    /* After 5000 ms pause -> Turn 3 starts with drawer fin; fin chooses word, then leaves during DRAWING when only 2 players remain:
+     * - nplayers drops to 1 (< 2) -> emits GAME_END|NOT_ENOUGH_PLAYERS, NOT TURN_END|DRAWER_LEFT */
+    clock_advance(&s_srv.clock, 5000);
+    game_tick(&s_srv, clock_now_ms(&s_srv.clock));
+    assert_int_equal(r2->state, ROOM_CHOOSING);
+    assert_string_equal(r2->drawer, "fin");
+    (void)snprintf(r2->options[0], sizeof(r2->options[0]), "dog");
+    dispatch_line(&s_srv, u3, "CHOOSE_WORD|1");
+    clear_out(u3);
+    clear_out(u4);
+
+    dispatch_line(&s_srv, u3, "LEAVE_ROOM");
+    assert_string_equal(
+        u4->out,
+        "PLAYER_LEFT|fin|LEAVE\n"
+        "HOST_CHANGED|gus\n"
+        "GAME_END|NOT_ENOUGH_PLAYERS|gus:450\n"
+        "ROOM_INFO|2|R2|gus|4|2|60|LOBBY|gus\n"
+    );
+    assert_null(strstr(u4->out, "TURN_END|"));
+    assert_int_equal(r2->state, ROOM_LOBBY);
+    assert_int_equal(r2->players[0].score, 0);
+}
+
+static void test_game_logout_disconnect_two_leaves_and_post_not_enough_players(void **state)
+{
+    Conn *c1;
+    Conn *c2;
+    Conn *c3;
+    Conn *c4;
+    (void)state;
+
+    init_test_server();
+    c1 = make_user("alice");
+    c2 = make_user("bob");
+    c3 = make_user("carol");
+    c4 = make_user("dave");
+
+    dispatch_line(&s_srv, c1, "CREATE_ROOM|R1|4|2|60");
+    dispatch_line(&s_srv, c2, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, c3, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, c1, "START");
+
+    Room *r = &s_srv.rooms[0];
+    (void)snprintf(r->options[0], sizeof(r->options[0]), "cat");
+    dispatch_line(&s_srv, c1, "CHOOSE_WORD|1");
+    clear_out(c1);
+    clear_out(c2);
+    clear_out(c3);
+
+    /* 1. LOGOUT followed by session_on_disconnect (and room_leave again) emits ONLY ONE PLAYER_LEFT */
+    dispatch_line(&s_srv, c3, "LOGOUT");
+    session_on_disconnect(&s_srv, c3);
+    room_leave(&s_srv, c3, "DISCONNECT");
+    assert_string_equal(c1->out, "PLAYER_LEFT|carol|LEAVE\n");
+    assert_string_equal(c2->out, "PLAYER_LEFT|carol|LEAVE\n");
+    assert_int_equal(r->state, ROOM_DRAWING);
+    clear_out(c1);
+    clear_out(c2);
+
+    /* 2. Remaining guesser bob disconnects -> nplayers < 2 -> GAME_END|NOT_ENOUGH_PLAYERS */
+    session_on_disconnect(&s_srv, c2);
+    assert_string_equal(
+        c1->out,
+        "PLAYER_LEFT|bob|DISCONNECT\n"
+        "GAME_END|NOT_ENOUGH_PLAYERS|alice:0\n"
+        "ROOM_INFO|1|R1|alice|4|2|60|LOBBY|alice\n"
+    );
+    assert_int_equal(r->state, ROOM_LOBBY);
+    clear_out(c1);
+
+    /* 3. After NOT_ENOUGH_PLAYERS:
+     * - START with 1 player returns 207
+     * - New players join and START works again
+     * - Two players leave in the same loop iteration -> clean NOT_ENOUGH_PLAYERS without duplicate events */
+    dispatch_line(&s_srv, c1, "START");
+    assert_non_null(strstr(c1->out, "ERR|207|"));
+    clear_out(c1);
+
+    Conn *c5 = make_user("eve");
+    dispatch_line(&s_srv, c4, "JOIN_ROOM|1");
+    dispatch_line(&s_srv, c5, "JOIN_ROOM|1");
+    clear_out(c1);
+    clear_out(c4);
+    clear_out(c5);
+
+    dispatch_line(&s_srv, c1, "START");
+    assert_int_equal(r->state, ROOM_CHOOSING);
+    clear_out(c1);
+    clear_out(c4);
+    clear_out(c5);
+
+    /* Host alice and eve both leave in the same loop iteration (3 players -> 1 player dave) */
+    dispatch_line(&s_srv, c1, "LEAVE_ROOM");
+    dispatch_line(&s_srv, c5, "LEAVE_ROOM");
+    assert_string_equal(
+        c4->out,
+        "PLAYER_LEFT|alice|LEAVE\n"
+        "HOST_CHANGED|dave\n"
+        "TURN_END|DRAWER_LEFT||dave:0:0,eve:0:0\n"
+        "PLAYER_LEFT|eve|LEAVE\n"
+        "GAME_END|NOT_ENOUGH_PLAYERS|dave:0\n"
+        "ROOM_INFO|1|R1|dave|4|2|60|LOBBY|dave\n"
+    );
+    assert_int_equal(r->state, ROOM_LOBBY);
+    clear_out(c1);
+    clear_out(c4);
+    clear_out(c5);
+
+    /* Host transferred to dave (players[0]):
+     * - alice re-joins (now players[1]), alice sending START gets 206
+     * - dave sending START succeeds */
+    dispatch_line(&s_srv, c1, "JOIN_ROOM|1");
+    clear_out(c1);
+    clear_out(c4);
+
+    dispatch_line(&s_srv, c1, "START");
+    assert_non_null(strstr(c1->out, "ERR|206|"));
+    clear_out(c1);
+
+    dispatch_line(&s_srv, c4, "START");
+    assert_non_null(strstr(c4->out, "GAME_START|2|dave,alice\n"));
+    assert_int_equal(r->state, ROOM_CHOOSING);
+    clear_out(c1);
+    clear_out(c4);
+
+    /* Both dave and alice leave -> room becomes empty and is deleted (r->id == 0);
+     * subsequent ticks do not touch or emit anything */
+    dispatch_line(&s_srv, c4, "LEAVE_ROOM");
+    assert_int_equal(r->state, ROOM_LOBBY);
+    clear_out(c1);
+    clear_out(c4);
+
+    dispatch_line(&s_srv, c1, "LEAVE_ROOM");
+    assert_string_equal(c1->out, "OK\n");
+    assert_int_equal(r->id, 0);
+    clear_out(c1);
+
+    clock_advance(&s_srv.clock, 60000);
+    game_tick(&s_srv, clock_now_ms(&s_srv.clock));
+    assert_int_equal(c1->out_len, 0);
+    assert_int_equal(c4->out_len, 0);
 }
 
 int run_game_tests(void)
@@ -1012,6 +1296,8 @@ int run_game_tests(void)
         cmocka_unit_test(test_game_turn_end_all_guessed_timeup_and_idempotence),
         cmocka_unit_test(test_game_full_rotation_2_rounds_3_players_and_two_games),
         cmocka_unit_test(test_game_scoreboard_and_ranking_edge_cases),
+        cmocka_unit_test(test_game_player_leaves_drawer_guesser_and_turn_end),
+        cmocka_unit_test(test_game_logout_disconnect_two_leaves_and_post_not_enough_players),
     };
     return cmocka_run_group_tests_name("game", tests, NULL, NULL);
 }

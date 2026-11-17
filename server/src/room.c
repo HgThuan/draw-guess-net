@@ -265,7 +265,7 @@ void room_leave(struct Server *s, Conn *c, const char *reason)
 
     char left_name[NAME_MAX_LEN + 1];
     memcpy(left_name, r->players[pidx].name, sizeof(left_name));
-    bool was_drawer = (r->state != ROOM_LOBBY && strcmp(r->drawer, left_name) == 0);
+    bool was_drawer = game_is_current_drawer(r, left_name);
 
     if (pidx + 1 < r->nplayers) {
         memmove(&r->players[pidx], &r->players[pidx + 1],
