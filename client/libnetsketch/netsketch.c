@@ -4,6 +4,7 @@
 #include "framing.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -14,6 +15,13 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
+#define NS_CONNECT_TIMEOUT_MS 3000
+#define NS_SEND_TIMEOUT_MS    1000
+
 struct ns_conn {
     int     fd;
     LineBuf lb;
@@ -22,11 +30,25 @@ struct ns_conn {
     size_t  rx_len;
 };
 
+static int set_fd_nonblock(int fd)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return -1; /* GCOVR_EXCL_LINE */
+    }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
 ns_conn *ns_from_fd(int fd)
 {
     if (fd < 0) {
         return NULL;
     }
+    (void)set_fd_nonblock(fd);
+#ifdef SO_NOSIGPIPE
+    int one = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
     ns_conn *c = (ns_conn *)malloc(sizeof(*c));
     if (!c) {
         return NULL; /* GCOVR_EXCL_LINE */
@@ -65,13 +87,30 @@ ns_conn *ns_connect(const char *host, int port)
 
     int one = 1;
     (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    (void)set_fd_nonblock(fd);
 
-    if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
-        close(fd);
-        freeaddrinfo(res);
-        return NULL;
-    }
+    int rc = connect(fd, res->ai_addr, res->ai_addrlen);
     freeaddrinfo(res);
+    if (rc < 0) {
+        if (errno != EINPROGRESS) {
+            close(fd);
+            return NULL;
+        }
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        if (poll(&pfd, 1, NS_CONNECT_TIMEOUT_MS) <= 0) {
+            close(fd);
+            return NULL;
+        }
+        int so_err = 0;
+        socklen_t slen = sizeof(so_err);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &slen) < 0 || so_err != 0) {
+            close(fd);
+            return NULL;
+        }
+    }
 
     ns_conn *c = ns_from_fd(fd);
     if (!c) {
@@ -105,6 +144,14 @@ int ns_send_line(ns_conn *c, const char *line)
             sent += (size_t)n;
         } else if (n < 0 && errno == EINTR) {
             continue; /* GCOVR_EXCL_LINE */
+        } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct pollfd pfd;
+            pfd.fd = c->fd;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            if (poll(&pfd, 1, NS_SEND_TIMEOUT_MS) <= 0) {
+                return -1; /* GCOVR_EXCL_LINE */
+            }
         } else {
             return -1;
         }
