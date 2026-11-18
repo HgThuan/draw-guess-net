@@ -51,7 +51,7 @@ $(UNIT_BIN): $(COMMON_SRCS) $(SERVER_LOGIC_SRCS) $(CLIENT_SRCS) $(TEST_SRCS) | $
 test: $(UNIT_BIN)
 	./$(UNIT_BIN)
 
-itest: $(SERVER_BIN)
+itest: $(SERVER_BIN) $(CLIENT_LIB)
 	pytest -q tests/integration --server $(SERVER_BIN)
 
 check: test itest
@@ -73,7 +73,7 @@ $(COV_SERVER_BIN): $(COMMON_SRCS) $(SERVER_SRCS) | $(COV_DIR)
 $(COV_UNIT_BIN): $(COMMON_SRCS) $(SERVER_LOGIC_SRCS) $(CLIENT_SRCS) $(TEST_SRCS) | $(COV_DIR)
 	$(CC) $(COVFLAGS) $(INCLUDES) $^ -lcmocka -o $@
 
-coverage: | $(COV_DIR) $(COV_HTML_DIR)
+coverage: $(CLIENT_LIB) | $(COV_DIR) $(COV_HTML_DIR)
 	find $(COV_DIR) -name '*.gcda' -delete
 	$(MAKE) $(COV_SERVER_BIN) $(COV_UNIT_BIN)
 	./$(COV_UNIT_BIN)
@@ -94,7 +94,7 @@ $(ASAN_SERVER_BIN): $(COMMON_SRCS) $(SERVER_SRCS) | $(ASAN_DIR)
 $(ASAN_UNIT_BIN): $(COMMON_SRCS) $(SERVER_LOGIC_SRCS) $(CLIENT_SRCS) $(TEST_SRCS) | $(ASAN_DIR)
 	$(CC) $(ASANFLAGS) $(INCLUDES) $^ -lcmocka -o $@
 
-asan: $(ASAN_SERVER_BIN) $(ASAN_UNIT_BIN)
+asan: $(ASAN_SERVER_BIN) $(ASAN_UNIT_BIN) $(CLIENT_LIB)
 	./$(ASAN_UNIT_BIN)
 	pytest -q tests/integration --server $(ASAN_SERVER_BIN)
 
