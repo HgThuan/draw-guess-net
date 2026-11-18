@@ -152,6 +152,11 @@ void h_create_room(struct Server *s, Conn *c, const Command *cmd)
     memcpy(slot->players[0].name, c->user, strlen(c->user) + 1);
 
     c->room_id = slot->id;
+    /* Room names may contain spaces, so quote them to keep the line parseable. */
+    logger_log(&s->log, LOG_INFO, clock_now_ms(&s->clock),
+               "sid=%s room=%d event=ROOM_CREATE user=%s name=\"%s\" max=%d rounds=%d draw_time=%d",
+               c->session_id, slot->id, c->user, slot->name,
+               max_players, rounds, draw_time);
 
     char id_buf[16];
     (void)snprintf(id_buf, sizeof(id_buf), "%d", slot->id);
@@ -228,6 +233,8 @@ void h_join_room(struct Server *s, Conn *c, const Command *cmd)
     r->players[idx].conn = conn_id(c);
     memcpy(r->players[idx].name, c->user, strlen(c->user) + 1);
     c->room_id = r->id;
+    logger_log(&s->log, LOG_INFO, clock_now_ms(&s->clock),
+               "sid=%s room=%d event=ROOM_JOIN user=%s", c->session_id, r->id, c->user);
 
     char id_buf[16];
     (void)snprintf(id_buf, sizeof(id_buf), "%d", r->id);
@@ -266,6 +273,13 @@ void room_leave(struct Server *s, Conn *c, const char *reason)
     char left_name[NAME_MAX_LEN + 1];
     memcpy(left_name, r->players[pidx].name, sizeof(left_name));
     bool was_drawer = game_is_current_drawer(r, left_name);
+    const char *why = (reason && reason[0]) ? reason : "LEAVE";
+    int64_t now_ms = clock_now_ms(&s->clock);
+
+    /* Log while the session id and room id are still valid. */
+    logger_log(&s->log, LOG_INFO, now_ms,
+               "sid=%s room=%d event=ROOM_LEAVE user=%s reason=%s",
+               c->session_id[0] ? c->session_id : "-", r->id, left_name, why);
 
     if (pidx + 1 < r->nplayers) {
         memmove(&r->players[pidx], &r->players[pidx + 1],
@@ -274,16 +288,18 @@ void room_leave(struct Server *s, Conn *c, const char *reason)
     r->nplayers--;
 
     if (r->nplayers <= 0) {
+        logger_log(&s->log, LOG_INFO, now_ms, "sid=- room=%d event=ROOM_DELETE", r->id);
         memset(r, 0, sizeof(*r));
         return;
     }
 
     char ev[64];
-    (void)snprintf(ev, sizeof(ev), "PLAYER_LEFT|%s|%s",
-                   left_name, (reason && reason[0]) ? reason : "LEAVE");
+    (void)snprintf(ev, sizeof(ev), "PLAYER_LEFT|%s|%s", left_name, why);
     room_broadcast(s, r, ev, CONN_ID_NONE);
 
     if (pidx == 0) {
+        logger_log(&s->log, LOG_INFO, now_ms, "sid=- room=%d event=HOST_CHANGED host=%s",
+                   r->id, r->players[0].name);
         (void)snprintf(ev, sizeof(ev), "HOST_CHANGED|%s", r->players[0].name);
         room_broadcast(s, r, ev, CONN_ID_NONE);
     }

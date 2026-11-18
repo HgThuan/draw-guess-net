@@ -69,6 +69,13 @@ class Client:
             if time.monotonic() >= deadline:
                 raise AssertionError(f"Expected prefix {prefix!r}, last got {line!r}")
 
+    def next_line(self, timeout: float = 3.0) -> str:
+        """Next line on this connection, skipping TIME ticks that may arrive at any moment."""
+        while True:
+            line = self.recv_line(timeout=timeout)
+            if not line.startswith("TIME|"):
+                return line
+
     def close(self) -> None:
         try:
             self.sock.close()
@@ -187,3 +194,31 @@ def server_factory(request, tmp_path):
 @pytest.fixture
 def server(server_factory) -> ServerInstance:
     return server_factory()
+
+
+def login(srv: ServerInstance, name: str) -> Client:
+    c = srv.connect()
+    c.send(f"REGISTER|{name}|Secret123")
+    assert c.recv_line() == "OK"
+    c.send(f"LOGIN|{name}|Secret123")
+    assert c.recv_line().startswith("OK|")
+    return c
+
+
+def make_room(srv: ServerInstance, names, rounds: int = 2, draw_time: int = 60,
+              room_name: str = "Phong Vui"):
+    """Log everyone in, names[0] creates the room, the rest join; all buffers end up drained."""
+    clients = [login(srv, n) for n in names]
+    host = clients[0]
+    host.send(f"CREATE_ROOM|{room_name}|{max(len(names), 2) + 1}|{rounds}|{draw_time}")
+    ok = host.next_line()
+    assert ok.startswith("OK|")
+    room_id = int(ok.split("|")[1])
+    assert host.next_line().startswith(f"ROOM_INFO|{room_id}|")
+    for i, c in enumerate(clients[1:], start=1):
+        c.send(f"JOIN_ROOM|{room_id}")
+        assert c.next_line() == f"OK|{room_id}"
+        assert c.next_line().startswith(f"ROOM_INFO|{room_id}|")
+        for prev in clients[:i]:
+            assert prev.next_line() == f"PLAYER_JOINED|{names[i]}"
+    return clients, room_id
