@@ -57,7 +57,9 @@ FrameStatus linebuf_feed(LineBuf *lb, const char *data, size_t data_len,
             lb->discarding = true;
             lb->len = 0;
         } else {
-            lb->buf[lb->len++] = c;
+            /* Embedded NUL is invalid in a text line; map to 0x01 so C-string parsers
+             * see the full line length and reject it as a control character. */
+            lb->buf[lb->len++] = (c == '\0') ? '\x01' : c;
         }
     }
 
