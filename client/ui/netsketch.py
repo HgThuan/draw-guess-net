@@ -129,8 +129,80 @@ class StrokeItem:
 
 
 @dataclass
+class FeedItem:
+    kind: str  # "system", "chat", "solved_chat", "guess_wrong", "guess_correct"
+    text: str
+
+
+def format_word_hint(hint: str, is_drawer: bool = False) -> str:
+    """Format DRAW_START hint for display.
+
+    - Drawer receives the actual secret word -> returned verbatim (e.g. 'ice cream').
+    - Guessers receive underscores and spaces (e.g. '___ _____') -> characters within
+      each word are separated by 1 space, original word spaces become 3 spaces,
+      followed by word lengths in parentheses: '_ _ _   _ _ _ _ _ (3, 5)'.
+    """
+    if not hint:
+        return ""
+    if is_drawer or any(c not in "_ " for c in hint):
+        return hint
+    words = hint.split(" ")
+    spaced_words = [" ".join(list(w)) for w in words if w]
+    lengths = [str(len(w)) for w in words if w]
+    if not spaced_words:
+        return hint
+    return f"{'   '.join(spaced_words)} ({', '.join(lengths)})"
+
+
+def parse_turn_end_scores(raw_scores: str) -> List[Tuple[str, int, int]]:
+    """Parse 'u1:total1:delta1,u2:total2:delta2' into [(user, total, delta), ...]."""
+    out: List[Tuple[str, int, int]] = []
+    if not raw_scores:
+        return out
+    for item in raw_scores.split(","):
+        if not item:
+            continue
+        parts = item.split(":")
+        if len(parts) != 3:
+            continue
+        try:
+            out.append((parts[0], int(parts[1]), int(parts[2])))
+        except ValueError:
+            continue
+    return out
+
+
+def parse_ranking_list(raw_ranking: str) -> List[Tuple[str, int]]:
+    """Parse 'u1:score1,u2:score2' (from GAME_END or SCOREBOARD) into [(user, score), ...]."""
+    out: List[Tuple[str, int]] = []
+    if not raw_ranking:
+        return out
+    for item in raw_ranking.split(","):
+        if not item:
+            continue
+        parts = item.split(":")
+        if len(parts) != 2:
+            continue
+        try:
+            out.append((parts[0], int(parts[1])))
+        except ValueError:
+            continue
+    return out
+
+
+@dataclass
 class RoomModel:
-    """State snapshot updated strictly from server events, independent of Tkinter widgets."""
+    """State snapshot updated strictly from server events (plus SCOREBOARD response).
+
+    Rules:
+    - ROOM_INFO carries player names only; when in LOBBY it resets scores to 0,
+      while preserving final_ranking from the just-ended game until GAME_START
+      or dismiss_final_ranking().
+    - Scores and chat/guess feed are updated only from server events (GUESS_CORRECT,
+      TURN_END, GAME_END, CHAT, GUESS_WRONG) and SCOREBOARD responses, never from
+      OK|CORRECT, preventing double-counting or duplicate messages.
+    - Countdown clock uses a monotonic phase_deadline so UI timer jitter never drifts.
+    """
     in_room: bool = False
     room_id: int = 0
     name: str = ""
@@ -142,9 +214,22 @@ class RoomModel:
     players: List[str] = field(default_factory=list)
     round_no: int = 0
     drawer: str = ""
+    word_options: List[str] = field(default_factory=list)
     word_hint: str = ""
+    last_turn_word: str = ""
+    last_turn_reason: str = ""
     remaining_s: int = 0
+    phase_deadline: float = 0.0
+    clock_fn: Callable[[], float] = time.monotonic
+
+    scores: Dict[str, int] = field(default_factory=dict)
+    turn_deltas: Dict[str, int] = field(default_factory=dict)
+    guessed_users: Set[str] = field(default_factory=set)
     strokes: List[StrokeItem] = field(default_factory=list)
+    feed: List[FeedItem] = field(default_factory=list)
+
+    final_ranking: List[Tuple[str, int]] = field(default_factory=list)
+    game_end_reason: str = ""
 
     def reset(self) -> None:
         self.in_room = False
@@ -158,9 +243,51 @@ class RoomModel:
         self.players.clear()
         self.round_no = 0
         self.drawer = ""
+        self.word_options.clear()
         self.word_hint = ""
+        self.last_turn_word = ""
+        self.last_turn_reason = ""
         self.remaining_s = 0
+        self.phase_deadline = 0.0
+        self.scores.clear()
+        self.turn_deltas.clear()
+        self.guessed_users.clear()
         self.strokes.clear()
+        self.feed.clear()
+        self.final_ranking.clear()
+        self.game_end_reason = ""
+
+    def dismiss_final_ranking(self) -> None:
+        self.final_ranking.clear()
+        self.game_end_reason = ""
+
+    def _set_deadline(self, seconds: int) -> None:
+        sec = max(0, int(seconds))
+        self.remaining_s = sec
+        self.phase_deadline = (self.clock_fn() + float(sec)) if sec > 0 else 0.0
+
+    def current_remaining_s(self, now: Optional[float] = None) -> int:
+        """Compute remaining seconds from monotonic deadline without drifting."""
+        if self.state not in ("CHOOSING_WORD", "DRAWING") or self.phase_deadline <= 0.0:
+            self.remaining_s = 0
+            return 0
+        t_now = self.clock_fn() if now is None else float(now)
+        rem = math.ceil(self.phase_deadline - t_now)
+        self.remaining_s = max(0, int(rem))
+        return self.remaining_s
+
+    def _append_feed(self, kind: str, text: str) -> None:
+        self.feed.append(FeedItem(kind=kind, text=text))
+        if len(self.feed) > 200:
+            del self.feed[: len(self.feed) - 200]
+
+    def apply_scoreboard(self, args: List[str]) -> bool:
+        """Apply OK|<u1:s1,u2:s2,...> response from SCOREBOARD as authoritative scores."""
+        raw = args[0] if args else ""
+        entries = parse_ranking_list(raw)
+        for user, sc in entries:
+            self.scores[user] = sc
+        return True
 
     def apply_event(self, ev: Event) -> bool:
         """Update model from an incoming Event. Returns True if room state changed."""
@@ -179,9 +306,20 @@ class RoomModel:
                 if self.state == "LOBBY":
                     self.round_no = 0
                     self.drawer = ""
+                    self.word_options.clear()
                     self.word_hint = ""
                     self.remaining_s = 0
+                    self.phase_deadline = 0.0
+                    self.scores = {p: 0 for p in self.players}
+                    self.turn_deltas = {p: 0 for p in self.players}
+                    self.guessed_users.clear()
                     self.strokes.clear()
+                    # Note: final_ranking and game_end_reason are intentionally preserved
+                    # so ROOM_INFO arriving right after GAME_END does not wipe the scoreboard.
+                else:
+                    for p in self.players:
+                        self.scores.setdefault(p, 0)
+                        self.turn_deltas.setdefault(p, 0)
                 return True
             except ValueError:
                 return False
@@ -193,44 +331,83 @@ class RoomModel:
             user = ev.args[0]
             if user and user not in self.players:
                 self.players.append(user)
+                self.scores.setdefault(user, 0)
+                self.turn_deltas.setdefault(user, 0)
+                self._append_feed("system", f"+ {user} đã vào phòng.")
             return True
 
         if ev.name == "PLAYER_LEFT" and len(ev.args) >= 1:
             user = ev.args[0]
+            reason = ev.args[1] if len(ev.args) >= 2 else "LEAVE"
             if user in self.players:
                 self.players.remove(user)
+            self.scores.pop(user, None)
+            self.turn_deltas.pop(user, None)
+            self.guessed_users.discard(user)
+            self._append_feed("system", f"- {user} đã rời phòng ({reason}).")
             return True
 
         if ev.name == "HOST_CHANGED" and len(ev.args) >= 1:
             self.host = ev.args[0]
+            self._append_feed("system", f"Chủ phòng mới: {self.host}")
             return True
 
         if ev.name == "GAME_START" and len(ev.args) >= 2:
             self.state = "PLAYING"
+            try:
+                self.rounds = int(ev.args[0])
+            except ValueError:
+                pass
+            self.dismiss_final_ranking()
+            self.scores = {p: 0 for p in self.players}
+            self.turn_deltas = {p: 0 for p in self.players}
+            self.guessed_users.clear()
             self.strokes.clear()
+            self._append_feed("system", f"=== Ván chơi bắt đầu ({self.rounds} vòng) ===")
             return True
 
         if ev.name == "TURN_START" and len(ev.args) >= 3:
             self.state = "CHOOSING_WORD"
+            choose_s = 15
             try:
                 self.round_no = int(ev.args[0])
-                self.remaining_s = int(ev.args[2])
+                choose_s = int(ev.args[2])
             except ValueError:
                 pass
             self.drawer = ev.args[1]
+            self.word_options.clear()
             self.word_hint = ""
+            self.last_turn_word = ""
+            self.last_turn_reason = ""
+            self._set_deadline(choose_s)
+            self.turn_deltas = {p: 0 for p in self.players}
+            self.guessed_users.clear()
             self.strokes.clear()
+            self._append_feed(
+                "system",
+                f"--- Vòng {self.round_no}/{self.rounds}: {self.drawer} đang chọn từ ({choose_s}s) ---",
+            )
+            return True
+
+        if ev.name == "WORD_OPTIONS" and len(ev.args) >= 3:
+            self.word_options = [ev.args[0], ev.args[1], ev.args[2]]
             return True
 
         if ev.name == "DRAW_START" and len(ev.args) >= 3:
             self.state = "DRAWING"
             self.drawer = ev.args[0]
+            draw_s = self.draw_time or 60
             try:
-                self.remaining_s = int(ev.args[1])
+                draw_s = int(ev.args[1])
             except ValueError:
                 pass
+            self.word_options.clear()
             self.word_hint = ev.args[2]
+            self._set_deadline(draw_s)
+            self.turn_deltas = {p: 0 for p in self.players}
+            self.guessed_users.clear()
             self.strokes.clear()
+            self._append_feed("system", f"Bắt đầu vẽ! Người vẽ: {self.drawer} ({draw_s}s)")
             return True
 
         if ev.name == "STROKE":
@@ -246,22 +423,78 @@ class RoomModel:
 
         if ev.name == "TIME" and len(ev.args) >= 1:
             try:
-                self.remaining_s = int(ev.args[0])
+                rem = int(ev.args[0])
+                self._set_deadline(rem)
             except ValueError:
                 pass
             return True
 
-        if ev.name == "TURN_END":
-            self.state = "TURN_END"
-            self.remaining_s = 0
+        if ev.name == "GUESS_WRONG" and len(ev.args) >= 2:
+            user, text = ev.args[0], ev.args[1]
+            self._append_feed("guess_wrong", f"[Đoán] {user}: {text}")
             return True
 
-        if ev.name == "GAME_END":
+        if ev.name == "GUESS_CORRECT" and len(ev.args) >= 2:
+            user = ev.args[0]
+            pts = 0
+            try:
+                pts = int(ev.args[1])
+            except ValueError:
+                pass
+            # Provisional update: only add if not already marked guessed in this turn,
+            # and TURN_END will overwrite with authoritative totals.
+            if user not in self.guessed_users:
+                self.guessed_users.add(user)
+                self.turn_deltas[user] = pts
+                self.scores[user] = self.scores.get(user, 0) + pts
+            self._append_feed("guess_correct", f"[Đoán đúng] {user} (+{pts} điểm)!")
+            return True
+
+        if ev.name == "CHAT" and len(ev.args) >= 2:
+            user, text = ev.args[0], ev.args[1]
+            is_private = (
+                self.state == "DRAWING"
+                and (user in self.guessed_users or user == self.drawer)
+            )
+            if is_private:
+                self._append_feed("solved_chat", f"[Kênh đã đoán] {user}: {text}")
+            else:
+                self._append_feed("chat", f"[Chat] {user}: {text}")
+            return True
+
+        if ev.name == "TURN_END" and len(ev.args) >= 3:
+            self.state = "TURN_END"
+            self.last_turn_reason = ev.args[0]
+            self.last_turn_word = ev.args[1]
+            self.word_options.clear()
+            self._set_deadline(0)
+            for user, total, delta in parse_turn_end_scores(ev.args[2]):
+                self.scores[user] = total
+                self.turn_deltas[user] = delta
+            word_disp = self.last_turn_word if self.last_turn_word else "(chưa chọn)"
+            self._append_feed(
+                "system",
+                f"Kết thúc lượt ({self.last_turn_reason}) — Từ khóa: {word_disp}",
+            )
+            return True
+
+        if ev.name == "GAME_END" and len(ev.args) >= 2:
             self.state = "LOBBY"
+            self.game_end_reason = ev.args[0]
+            self.final_ranking = parse_ranking_list(ev.args[1])
+            for user, sc in self.final_ranking:
+                self.scores[user] = sc
             self.drawer = ""
+            self.word_options.clear()
             self.word_hint = ""
-            self.remaining_s = 0
+            self._set_deadline(0)
             self.strokes.clear()
+            reason_vi = (
+                "Không đủ người chơi"
+                if self.game_end_reason == "NOT_ENOUGH_PLAYERS"
+                else "Hoàn thành tất cả các vòng"
+            )
+            self._append_feed("system", f"=== Kết thúc ván ({reason_vi}) ===")
             return True
 
         return False

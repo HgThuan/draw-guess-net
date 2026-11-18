@@ -403,3 +403,87 @@ def test_real_server_stroke_batcher_replay_and_clear(server_factory):
     finally:
         c1.close()
         c2.close()
+
+
+def test_real_server_3_ui_clients_complete_game_chat_and_final_ranking(server_factory):
+    srv = server_factory(extra_args=["--idle-timeout", "30"])
+    models = [RoomModel(), RoomModel(), RoomModel()]
+    clients = [NetSketchClient(on_event=m.apply_event) for m in models]
+    names = ["alice", "bob", "carol"]
+
+    try:
+        for c in clients:
+            assert c.connect("127.0.0.1", srv.port)
+        _drive_until(clients, lambda: all(c.hello_received for c in clients))
+
+        ack: dict[str, Response] = {}
+        for i, name in enumerate(names):
+            clients[i].send_cmd(f"REGISTER|{name}|Secret123", lambda r, k=f"r{i}": ack.setdefault(k, r))
+            clients[i].send_cmd(f"LOGIN|{name}|Secret123", lambda r, k=f"l{i}": ack.setdefault(k, r))
+        _drive_until(clients, lambda: len(ack) == 6)
+
+        clients[0].send_cmd("CREATE_ROOM|DemoRoom|3|1|60", lambda r: ack.setdefault("cr", r))
+        _drive_until(clients, lambda: models[0].in_room)
+        for i in (1, 2):
+            clients[i].send_cmd("JOIN_ROOM|1", lambda r, k=f"j{i}": ack.setdefault(k, r))
+        _drive_until(clients, lambda: all(m.in_room and len(m.players) == 3 for m in models))
+
+        clients[0].send_cmd("START", lambda r: ack.setdefault("st", r))
+
+        # Play all 3 turns of Round 1
+        for drawer_idx in range(3):
+            _drive_until(
+                clients,
+                lambda d=drawer_idx: (
+                    all(m.state == "CHOOSING_WORD" and m.drawer == names[d] for m in models)
+                    and len(models[d].word_options) == 3
+                ),
+            )
+            chosen_word = models[drawer_idx].word_options[0]
+            clients[drawer_idx].send_cmd("CHOOSE_WORD|1", lambda r: None)
+            _drive_until(clients, lambda: all(m.state == "DRAWING" for m in models))
+            assert models[drawer_idx].word_hint == chosen_word
+
+            others = [i for i in range(3) if i != drawer_idx]
+            g1, g2 = others[0], others[1]
+
+            # g1 guesses wrong, then leaks answer in CHAT -> receives ERR|306
+            chat_res: list[Response] = []
+            clients[g1].send_cmd("GUESS|wrongword", lambda r: None)
+            clients[g1].send_cmd(f"CHAT|answer is {chosen_word}", chat_res.append)
+            _drive_until(clients, lambda: len(chat_res) == 1)
+            assert not chat_res[0].ok and chat_res[0].code == 306
+
+            # g1 guesses right -> sends solved-channel CHAT -> only drawer and g1 receive it
+            clients[g1].send_cmd(f"GUESS|{chosen_word}", lambda r: None)
+            _drive_until(clients, lambda: names[g1] in models[g1].guessed_users)
+
+            msg = f"nice drawing turn {drawer_idx}"
+            clients[g1].send_cmd(f"CHAT|{msg}", lambda r: None)
+            _drive_until(
+                clients,
+                lambda m_txt=msg, d=drawer_idx: any(
+                    m_txt in f.text and f.kind == "solved_chat" for f in models[d].feed
+                ),
+            )
+            assert not any(msg in f.text for f in models[g2].feed)
+
+            # g2 guesses right -> turn ends with ALL_GUESSED
+            clients[g2].send_cmd(f"GUESS|{chosen_word}", lambda r: None)
+            _drive_until(clients, lambda: all(m.state in ("TURN_END", "CHOOSING_WORD", "LOBBY") for m in models))
+
+        # Wait for GAME_END|FINISHED + subsequent ROOM_INFO|...|LOBBY
+        _drive_until(
+            clients,
+            lambda: all(m.state == "LOBBY" and len(m.final_ranking) == 3 for m in models),
+            timeout=5.0,
+        )
+        for m in models:
+            assert m.game_end_reason == "FINISHED"
+            # ROOM_INFO reset live lobby scores to 0 while keeping final_ranking intact
+            assert m.scores == {"alice": 0, "bob": 0, "carol": 0}
+            assert len(m.final_ranking) == 3
+            assert all(sc > 0 for _, sc in m.final_ranking)
+    finally:
+        for c in clients:
+            c.close()
