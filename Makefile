@@ -50,6 +50,7 @@ $(UNIT_BIN): $(COMMON_SRCS) $(SERVER_LOGIC_SRCS) $(CLIENT_SRCS) $(TEST_SRCS) | $
 
 test: $(UNIT_BIN)
 	./$(UNIT_BIN)
+	pytest -q tests/ui
 
 itest: $(SERVER_BIN) $(CLIENT_LIB)
 	pytest -q tests/integration --server $(SERVER_BIN)
@@ -58,7 +59,7 @@ check: test itest
 	@if grep -rnE "\b(gets|sprintf|strcpy)\b" common/ server/src/ client/libnetsketch/; then \
 		echo "ERROR: Forbidden unsafe C function found."; exit 1; \
 	fi
-	@if grep -rnE "\b(D-[0-9]{2,3}|T-[0-9]{3}|IT-[0-9]{2}|RB-[0-9]{2}|LT-[0-9]|protocol\.md|ARCHITECTURE\.md|TESTING\.md|DECISIONS\.md|TASKS\.md|AGENTS\.md)\b" common/ server/ client/ tests/unit/ tests/integration/*.py; then \
+	@if grep -rnE "\b(D-[0-9]{2,3}|T-[0-9]{3}|IT-[0-9]{2}|RB-[0-9]{2}|LT-[0-9]|protocol\.md|ARCHITECTURE\.md|TESTING\.md|DECISIONS\.md|TASKS\.md|AGENTS\.md)\b" common/ server/ client/ tests/unit/ tests/ui/ tests/integration/*.py; then \
 		echo "ERROR: Internal design doc reference found in code/tests."; exit 1; \
 	fi
 	@for p in $(LOGIC_PATHS); do \
