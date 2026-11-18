@@ -105,6 +105,11 @@ static void test_words_match_contains_and_hint(void **state)
     assert_true(words_contains("cat123", "cat"));
     assert_true(words_contains("maybe   ICE   CREAM, right?", "ice cream"));
     assert_false(words_contains("ice", "ice cream"));
+    assert_true(words_contains("ice  cream", "ice cream"));
+    assert_true(words_contains("I love ICECREAM", "ice cream"));
+    assert_false(words_contains("nice creamy", "ice cream"));
+    assert_true(words_contains("đáp án là CAT nhé", "cat"));
+    assert_false(words_contains("c a t", "cat"));
     assert_false(words_contains(NULL, "cat"));
     assert_false(words_contains("cat", ""));
 

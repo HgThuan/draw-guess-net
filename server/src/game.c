@@ -171,6 +171,9 @@ void game_end_game(struct Server *s, Room *r, GameEndReason reason)
     char ranking[RANKING_BUF_SIZE];
     game_format_ranking(r, ranking, sizeof(ranking));
 
+    logger_log(&s->log, LOG_INFO, clock_now_ms(&s->clock),
+               "sid=- room=%d event=GAME_END reason=%s", r->id, game_end_reason_str(reason));
+
     char ev[MAX_LINE];
     (void)snprintf(ev, sizeof(ev), "GAME_END|%s|%s",
                    game_end_reason_str(reason), ranking);
@@ -295,6 +298,9 @@ void game_end_turn(struct Server *s, Room *r, TurnEndReason reason, int64_t now_
                    r->word,
                    scores);
     room_broadcast(s, r, ev, CONN_ID_NONE);
+    /* The answer is deliberately left out of the log. */
+    logger_log(&s->log, LOG_INFO, now_ms, "sid=- room=%d event=TURN_END reason=%s round=%d drawer=%s",
+               r->id, turn_end_reason_str(reason), r->round, r->drawer);
 
     r->state = ROOM_TURN_END;
     r->phase_deadline_ms = now_ms + (int64_t)s->cfg.turn_pause_s * 1000;
@@ -329,6 +335,9 @@ void h_start(struct Server *s, Conn *c, const Command *cmd)
     }
 
     reply_ok(s, c, NULL);
+    logger_log(&s->log, LOG_INFO, clock_now_ms(&s->clock),
+               "sid=%s room=%d event=GAME_START rounds=%d nplayers=%d",
+               c->session_id, r->id, r->rounds, r->nplayers);
 
     reset_room_to_lobby(r);
     r->round = 1;
@@ -430,6 +439,8 @@ void h_guess(struct Server *s, Conn *c, const Command *cmd)
     char ok_payload[32];
     (void)snprintf(ok_payload, sizeof(ok_payload), "CORRECT|%d", pts);
     reply_ok(s, c, ok_payload);
+    logger_log(&s->log, LOG_INFO, now_ms, "sid=%s room=%d event=GUESS_CORRECT user=%s points=%d",
+               c->session_id, r->id, c->user, pts);
 
     char ev[128];
     (void)snprintf(ev, sizeof(ev), "GUESS_CORRECT|%s|%d", c->user, pts);

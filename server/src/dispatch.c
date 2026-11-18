@@ -1,5 +1,6 @@
 #include "dispatch.h"
 #include "auth.h"
+#include "chat.h"
 #include "draw.h"
 #include "game.h"
 #include "room.h"
@@ -28,7 +29,7 @@ static const CmdSpec CMD_SPECS[] = {
     { CMD_STROKE,      INT_ARG_1,     false, AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  h_stroke      },
     { CMD_CLEAR,       INT_ARG_NONE,  false, AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  h_clear       },
     { CMD_GUESS,       INT_ARG_NONE,  true,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_DRAWING,  h_guess       },
-    { CMD_CHAT,        INT_ARG_NONE,  true,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      NULL          },
+    { CMD_CHAT,        INT_ARG_NONE,  true,  AUTH_REQUIRED,   ROOM_IN_ONLY,  RSTATE_ANY,      h_chat        },
 };
 
 void reply_ok(Server *s, Conn *c, const char *payload)

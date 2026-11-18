@@ -150,7 +150,7 @@ static void test_dispatch_full_state_matrix(void **state)
         { "STROKE|FF0000|4|0,0,10,10",   {   101, 204,  300,   300,    0 } },
         { "CLEAR",                       {   101, 204,  300,   300,    0 } },
         { "GUESS|cat",                   {   101, 204,  300,   300,  302 } },
-        { "CHAT|hello",                  {   101, 204,    0,     0,    0 } },
+        { "CHAT|hello",                  {   101, 204,    0,   302,  302 } },
     };
 
     Conn *c;

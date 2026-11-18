@@ -21,7 +21,7 @@ static bool is_space_char(char c)
 }
 
 /* Trim leading/trailing spaces, collapse internal spaces to single ' ', optionally lowercase. */
-static size_t normalize_str(const char *in, char *out, size_t cap, bool lowercase)
+static size_t normalize_str(const char *in, char *out, size_t cap, bool lowercase, bool ascii_only)
 {
     if (!in || !out || cap == 0) {
         if (out && cap > 0) {
@@ -42,7 +42,7 @@ static size_t normalize_str(const char *in, char *out, size_t cap, bool lowercas
             prev_space = true;
             continue;
         }
-        if (*p < 0x20 || *p >= 0x7F) {
+        if (*p < 0x20 || *p == 0x7F || (ascii_only && *p >= 0x7F)) {
             out[0] = '\0';
             return 0;
         }
@@ -78,7 +78,7 @@ static bool words_add_unique(WordList *wl, const char *raw)
         return false;
     }
     char clean[WORD_MAX];
-    size_t len = normalize_str(raw, clean, sizeof(clean), false);
+    size_t len = normalize_str(raw, clean, sizeof(clean), false, true);
     if (len == 0) {
         return false;
     }
@@ -203,16 +203,12 @@ bool words_match(const char *guess, const char *word)
     return true;
 }
 
-bool words_contains(const char *text, const char *word)
+/* Whole-word search: a match glued to other letters ("educate") does not count. */
+static bool find_bounded(const char *nt, size_t lt, const char *nw, size_t lw)
 {
-    char nw[WORD_MAX];
-    char nt[MAX_LINE];
-    size_t lw = normalize_str(word, nw, sizeof(nw), true);
-    size_t lt = normalize_str(text, nt, sizeof(nt), true);
-    if (lw == 0 || lt == 0 || lw > lt) {
+    if (lw == 0 || lw > lt) {
         return false;
     }
-
     for (size_t pos = 0; pos + lw <= lt; pos++) {
         if (memcmp(nt + pos, nw, lw) != 0) {
             continue;
@@ -224,6 +220,31 @@ bool words_contains(const char *text, const char *word)
         }
     }
     return false;
+}
+
+bool words_contains(const char *text, const char *word)
+{
+    char nw[WORD_MAX];
+    char nt[MAX_LINE];
+    size_t lw = normalize_str(word, nw, sizeof(nw), true, true);
+    size_t lt = normalize_str(text, nt, sizeof(nt), true, false);
+    if (lw == 0 || lt == 0) {
+        return false;
+    }
+    if (find_bounded(nt, lt, nw, lw)) {
+        return true;
+    }
+
+    /* Multi-word answers typed without spaces ("icecream") must be caught too. */
+    char joined[WORD_MAX];
+    size_t lj = 0;
+    for (size_t i = 0; i < lw; i++) {
+        if (nw[i] != ' ') {
+            joined[lj++] = nw[i];
+        }
+    }
+    joined[lj] = '\0';
+    return lj != lw && find_bounded(nt, lt, joined, lj);
 }
 
 void words_make_hint(const char *word, char out[WORD_MAX])

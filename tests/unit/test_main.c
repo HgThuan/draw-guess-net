@@ -21,6 +21,7 @@ int run_client_lib_tests(void);
 int run_words_tests(void);
 int run_scoring_tests(void);
 int run_game_tests(void);
+int run_chat_tests(void);
 
 static void test_sanity_check(void **state)
 {
@@ -55,5 +56,6 @@ int main(void)
     rc |= run_words_tests();
     rc |= run_scoring_tests();
     rc |= run_game_tests();
+    rc |= run_chat_tests();
     return rc;
 }
