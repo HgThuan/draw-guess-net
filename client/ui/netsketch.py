@@ -23,6 +23,9 @@ DEFAULT_HELLO_TIMEOUT_S = 3.0
 DEFAULT_POLL_MAX_LINES = 200
 DEFAULT_POLL_MAX_MS = 10.0
 ROOMS_PER_PAGE = 8
+REF_CANVAS_WIDTH = 600
+DEFAULT_BATCH_MS = 30
+MAX_STROKE_POINTS = 40
 
 # Events whose final field is free text that may contain '|' characters.
 EVENT_MAXSPLIT: Dict[str, int] = {
@@ -119,6 +122,13 @@ class RoomSummary:
 
 
 @dataclass
+class StrokeItem:
+    color: str
+    width: int
+    points: List[Tuple[int, int]] = field(default_factory=list)
+
+
+@dataclass
 class RoomModel:
     """State snapshot updated strictly from server events, independent of Tkinter widgets."""
     in_room: bool = False
@@ -134,6 +144,7 @@ class RoomModel:
     drawer: str = ""
     word_hint: str = ""
     remaining_s: int = 0
+    strokes: List[StrokeItem] = field(default_factory=list)
 
     def reset(self) -> None:
         self.in_room = False
@@ -149,6 +160,7 @@ class RoomModel:
         self.drawer = ""
         self.word_hint = ""
         self.remaining_s = 0
+        self.strokes.clear()
 
     def apply_event(self, ev: Event) -> bool:
         """Update model from an incoming Event. Returns True if room state changed."""
@@ -169,6 +181,7 @@ class RoomModel:
                     self.drawer = ""
                     self.word_hint = ""
                     self.remaining_s = 0
+                    self.strokes.clear()
                 return True
             except ValueError:
                 return False
@@ -194,6 +207,7 @@ class RoomModel:
 
         if ev.name == "GAME_START" and len(ev.args) >= 2:
             self.state = "PLAYING"
+            self.strokes.clear()
             return True
 
         if ev.name == "TURN_START" and len(ev.args) >= 3:
@@ -205,6 +219,7 @@ class RoomModel:
                 pass
             self.drawer = ev.args[1]
             self.word_hint = ""
+            self.strokes.clear()
             return True
 
         if ev.name == "DRAW_START" and len(ev.args) >= 3:
@@ -215,6 +230,18 @@ class RoomModel:
             except ValueError:
                 pass
             self.word_hint = ev.args[2]
+            self.strokes.clear()
+            return True
+
+        if ev.name == "STROKE":
+            stroke = parse_stroke_event(ev.args)
+            if stroke is not None:
+                self.strokes.append(stroke)
+                return True
+            return False
+
+        if ev.name == "CLEAR":
+            self.strokes.clear()
             return True
 
         if ev.name == "TIME" and len(ev.args) >= 1:
@@ -234,6 +261,7 @@ class RoomModel:
             self.drawer = ""
             self.word_hint = ""
             self.remaining_s = 0
+            self.strokes.clear()
             return True
 
         return False
@@ -311,12 +339,232 @@ def validate_stroke(color: str, width: int, points: List[Tuple[int, int]]) -> bo
         return False
     if not (1 <= width <= 20):
         return False
-    if not (2 <= len(points) <= 40):
+    if not (2 <= len(points) <= MAX_STROKE_POINTS):
         return False
     for x, y in points:
         if not (0 <= x <= 1000 and 0 <= y <= 1000):
             return False
     return True
+
+
+def _round_half_up_to_norm(val: float, span: int) -> int:
+    if span <= 0 or val <= 0.0:
+        return 0
+    if val >= span:
+        return 1000
+    n = int((val * 1000.0) / span + 0.5)
+    return max(0, min(1000, n))
+
+
+def _round_half_up_to_px(norm_val: int, span: int) -> int:
+    if span <= 0:
+        return 0
+    clamped = max(0, min(1000, int(norm_val)))
+    return int((clamped * span) / 1000.0 + 0.5)
+
+
+def pixel_to_norm(px: float, py: float, width_px: int, height_px: int) -> Tuple[int, int]:
+    """Convert canvas pixel coordinates into clamped [0, 1000] normalized coordinates."""
+    return (
+        _round_half_up_to_norm(px, width_px),
+        _round_half_up_to_norm(py, height_px),
+    )
+
+
+def norm_to_pixel(nx: int, ny: int, width_px: int, height_px: int) -> Tuple[int, int]:
+    """Convert normalized [0, 1000] coordinates into canvas pixel coordinates."""
+    return (
+        _round_half_up_to_px(nx, width_px),
+        _round_half_up_to_px(ny, height_px),
+    )
+
+
+def scale_stroke_width(
+    width_norm: int,
+    canvas_width_px: int,
+    ref_width_px: int = REF_CANVAS_WIDTH,
+) -> int:
+    """Scale protocol width (1..20 on a 600px reference canvas) to actual canvas pixel width."""
+    clamped_w = max(1, min(20, int(width_norm)))
+    if canvas_width_px <= 0 or ref_width_px <= 0:
+        return clamped_w
+    return max(1, int((clamped_w * canvas_width_px) / float(ref_width_px) + 0.5))
+
+
+def format_stroke_cmd(color: str, width: int, points: List[Tuple[int, int]]) -> Optional[str]:
+    """Format a validated STROKE command line (without trailing newline)."""
+    if not validate_stroke(color, width, points):
+        return None
+    pts_str = ",".join(f"{int(x)},{int(y)}" for x, y in points)
+    return f"STROKE|{color.upper()}|{int(width)}|{pts_str}"
+
+
+def parse_stroke_event(args: List[str]) -> Optional[StrokeItem]:
+    """Safely parse STROKE event arguments [color, width, points_csv] into a StrokeItem."""
+    try:
+        if len(args) != 3:
+            return None
+        color = args[0].strip()
+        width = int(args[1].strip())
+        raw_nums = args[2].strip().split(",")
+        if len(raw_nums) < 4 or len(raw_nums) > 80 or (len(raw_nums) % 2) != 0:
+            return None
+        pts: List[Tuple[int, int]] = []
+        for i in range(0, len(raw_nums), 2):
+            x = int(raw_nums[i])
+            y = int(raw_nums[i + 1])
+            pts.append((x, y))
+        if not validate_stroke(color, width, pts):
+            return None
+        return StrokeItem(color=color.upper(), width=width, points=pts)
+    except Exception:
+        return None
+
+
+class StrokeBatcher:
+    """Pure polyline point batcher (30 ms or 40 points) with deterministic clock injection.
+
+    Rules:
+    - Reaches 40 points -> flushes immediately and keeps point #40 as point #1 of the next batch
+      so adjacent batches connect seamlessly.
+    - 30 ms elapsed via tick(now_ms) or add_point(..., now_ms) while len >= 2 -> flushes and
+      keeps the last point as the connecting start of the next batch.
+    - Changing tool mid-drag -> flushes any pending segment (len >= 2) first, keeping the tail
+      point for the new tool.
+    - Releasing mouse (end_stroke):
+      * If len == 1 and no batch was flushed yet in this drag: duplicates [p0, p0] so a single
+        dot is sent as a valid 2-point stroke.
+      * If len == 1 and a batch was already flushed in this drag: emits nothing (the single
+        point is only the connecting tail of the prior batch).
+      * If len >= 2: flushes remaining points.
+    - cancel() discards buffered points without sending (used on CLEAR, TURN_END, GAME_END, or leave).
+    """
+
+    def __init__(
+        self,
+        send_line_fn: Callable[[str], bool],
+        on_local_batch: Optional[Callable[[StrokeItem], None]] = None,
+        batch_ms: float = DEFAULT_BATCH_MS,
+        max_points: int = MAX_STROKE_POINTS,
+    ) -> None:
+        self._send_line = send_line_fn
+        self._on_local_batch = on_local_batch
+        self.batch_ms = float(batch_ms)
+        self.max_points = int(max_points)
+
+        self.color: str = "000000"
+        self.width: int = 4
+        self.dragging: bool = False
+        self._points: List[Tuple[int, int]] = []
+        self._flushed_in_drag: bool = False
+        self._last_flush_ms: float = 0.0
+
+    @property
+    def buffered_count(self) -> int:
+        return len(self._points)
+
+    @staticmethod
+    def _clamp_pt(nx: int, ny: int) -> Tuple[int, int]:
+        return max(0, min(1000, int(nx))), max(0, min(1000, int(ny)))
+
+    def _emit_batch(self, pts: List[Tuple[int, int]], now_ms: float, keep_tail: bool) -> bool:
+        cmd = format_stroke_cmd(self.color, self.width, pts)
+        if cmd is None:
+            return False
+        self._send_line(cmd)
+        if self._on_local_batch is not None:
+            self._on_local_batch(StrokeItem(color=self.color, width=self.width, points=list(pts)))
+        self._flushed_in_drag = True
+        self._last_flush_ms = now_ms
+        if keep_tail:
+            self._points = [pts[-1]]
+        else:
+            self._points.clear()
+        return True
+
+    def start_stroke(
+        self,
+        nx: int,
+        ny: int,
+        color: Optional[str] = None,
+        width: Optional[int] = None,
+        now_ms: float = 0.0,
+    ) -> None:
+        if self.dragging:
+            self.end_stroke(now_ms=now_ms)
+        if color is not None:
+            self.color = color.upper()
+        if width is not None:
+            self.width = max(1, min(20, int(width)))
+        self._points = [self._clamp_pt(nx, ny)]
+        self.dragging = True
+        self._flushed_in_drag = False
+        self._last_flush_ms = now_ms
+
+    def add_point(
+        self,
+        nx: int,
+        ny: int,
+        now_ms: float = 0.0,
+    ) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+        if not self.dragging:
+            return None
+        pt = self._clamp_pt(nx, ny)
+        if self._points and self._points[-1] == pt:
+            if len(self._points) >= 2 and (now_ms - self._last_flush_ms) >= self.batch_ms:
+                self._emit_batch(list(self._points), now_ms, keep_tail=True)
+            return None
+
+        prev = self._points[-1]
+        self._points.append(pt)
+        if len(self._points) >= self.max_points:
+            self._emit_batch(self._points[: self.max_points], now_ms, keep_tail=True)
+        elif len(self._points) >= 2 and (now_ms - self._last_flush_ms) >= self.batch_ms:
+            self._emit_batch(list(self._points), now_ms, keep_tail=True)
+        return prev, pt
+
+    def tick(self, now_ms: float) -> bool:
+        if self.dragging and len(self._points) >= 2 and (now_ms - self._last_flush_ms) >= self.batch_ms:
+            return self._emit_batch(list(self._points), now_ms, keep_tail=True)
+        return False
+
+    def change_tool(
+        self,
+        color: Optional[str] = None,
+        width: Optional[int] = None,
+        now_ms: float = 0.0,
+    ) -> None:
+        """Flush any in-progress segment before switching color/width so strokes are not lost."""
+        if self.dragging and len(self._points) >= 2:
+            self._emit_batch(list(self._points), now_ms, keep_tail=True)
+        if color is not None:
+            self.color = color.upper()
+        if width is not None:
+            self.width = max(1, min(20, int(width)))
+
+    def end_stroke(self, now_ms: float = 0.0) -> Optional[Tuple[int, int]]:
+        """Finish current drag. Returns (nx, ny) if a single-point dot was emitted."""
+        if not self.dragging:
+            return None
+        dot_pt: Optional[Tuple[int, int]] = None
+        if len(self._points) == 1:
+            if not self._flushed_in_drag:
+                p0 = self._points[0]
+                self._emit_batch([p0, p0], now_ms, keep_tail=False)
+                dot_pt = p0
+            else:
+                self._points.clear()
+        elif len(self._points) >= 2:
+            self._emit_batch(list(self._points), now_ms, keep_tail=False)
+        self.dragging = False
+        self._flushed_in_drag = False
+        return dot_pt
+
+    def cancel(self) -> None:
+        """Discard any unsent points immediately (on CLEAR, TURN_END, GAME_END, or room leave)."""
+        self._points.clear()
+        self.dragging = False
+        self._flushed_in_drag = False
 
 
 def parse_server_line(line: str) -> Tuple[Optional[Response], Optional[Event]]:
@@ -534,8 +782,15 @@ class NetSketchClient:
         return True
 
     def send_no_reply(self, line: str) -> bool:
-        """Send STROKE or CLEAR (which produce no OK response on success)."""
-        return self._raw_send(line)
+        """Send STROKE or CLEAR without blocking UI; drop batch if send buffer is full."""
+        if self._conn is None:
+            return False
+        rc = self._lib.ns_send_line(self._conn, line.encode("utf-8"))
+        if rc != 0:
+            logger.debug("Dropped no-reply command due to send failure/full buffer: %s", line[:32])
+            return False
+        self._next_ping_at = self._clock() + (self.ping_interval_ms / 1000.0)
+        return True
 
     def send_ping(self) -> bool:
         """Send PING without adding to _pending; PONG is matched by token."""

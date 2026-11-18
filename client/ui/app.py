@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import time
 import tkinter as tk
 from tkinter import ttk
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from netsketch import (
     ROOMS_PER_PAGE,
@@ -18,13 +19,30 @@ from netsketch import (
     Response,
     RoomModel,
     RoomSummary,
+    StrokeBatcher,
+    StrokeItem,
     calc_total_pages,
     format_error_vi,
+    norm_to_pixel,
     parse_room_list,
+    pixel_to_norm,
+    scale_stroke_width,
     validate_password,
     validate_room_params,
     validate_username,
 )
+
+PALETTE_COLORS: List[Tuple[str, str]] = [
+    ("Đen", "000000"),
+    ("Đỏ", "E53935"),
+    ("Lá", "43A047"),
+    ("Dương", "1E88E5"),
+    ("Vàng", "FDD835"),
+    ("Cam", "FB8C00"),
+    ("Tím", "8E24AA"),
+    ("Nâu", "6D4C41"),
+]
+SILENT_ASYNC_CODES = {300, 301, 302, 303, 305}
 
 logger = logging.getLogger("netsketch.ui")
 
@@ -384,42 +402,277 @@ class LobbyFrame(ttk.Frame):
 
 
 class RoomFrame(ttk.Frame):
-    """Room waiting & status screen driven strictly by RoomModel."""
+    """Room waiting & interactive drawing canvas screen driven strictly by RoomModel."""
 
     def __init__(self, master: tk.Widget, app: "NetSketchApp") -> None:
-        super().__init__(master, padding=16)
+        super().__init__(master, padding=12)
         self.app = app
+        self.canvas_w = max(240, int(app.canvas_width))
+        self.canvas_h = int((self.canvas_w * 3) // 4)
+        self._batch_timer_id = None
+
+        self.batcher = StrokeBatcher(
+            send_line_fn=self.app.client.send_no_reply,
+            on_local_batch=self._on_local_batch_emitted,
+        )
 
         header = ttk.Frame(self)
-        header.pack(fill="x", pady=(0, 12))
+        header.pack(fill="x", pady=(0, 8))
 
-        self.title_lbl = ttk.Label(header, text="", font=("sans-serif", 13, "bold"))
+        self.title_lbl = ttk.Label(header, text="", font=("sans-serif", 12, "bold"))
         self.title_lbl.pack(side="left")
 
         self.leave_btn = ttk.Button(header, text="Rời phòng", command=self.on_leave_room)
         self.leave_btn.pack(side="right")
 
         self.start_btn = ttk.Button(header, text="Bắt đầu ván (START)", command=self.on_start_game)
-        self.start_btn.pack(side="right", padx=8)
+        self.start_btn.pack(side="right", padx=6)
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True)
 
-        players_box = ttk.LabelFrame(body, text="Người chơi trong phòng", padding=8)
-        players_box.pack(side="left", fill="y", padx=(0, 8))
+        # Left column: Players & room details
+        left_col = ttk.Frame(body)
+        left_col.pack(side="left", fill="y", padx=(0, 8))
 
-        self.players_list = tk.Listbox(players_box, width=28, height=12)
+        players_box = ttk.LabelFrame(left_col, text="Người chơi", padding=6)
+        players_box.pack(fill="both", expand=True)
+
+        self.players_list = tk.Listbox(players_box, width=22, height=10)
         self.players_list.pack(fill="both", expand=True)
 
-        info_box = ttk.LabelFrame(body, text="Trạng thái phòng & ván chơi", padding=12)
-        info_box.pack(side="left", fill="both", expand=True)
-
+        info_box = ttk.LabelFrame(left_col, text="Thông tin ván", padding=6)
+        info_box.pack(fill="x", pady=(6, 0))
         self.info_var = tk.StringVar(value="")
         ttk.Label(info_box, textvariable=self.info_var, justify="left").pack(anchor="nw")
 
+        # Center/Right column: Fixed-aspect drawing canvas + toolbar
+        center_col = ttk.Frame(body)
+        center_col.pack(side="left", fill="both", expand=True)
+
+        self.canvas = tk.Canvas(
+            center_col,
+            width=self.canvas_w,
+            height=self.canvas_h,
+            bg="#FFFFFF",
+            highlightthickness=1,
+            highlightbackground="#888888",
+            cursor="crosshair",
+        )
+        self.canvas.pack(anchor="center", pady=(0, 6))
+        self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
+        self.canvas.bind("<B1-Motion>", self._on_canvas_motion)
+        self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+
+        toolbar = ttk.Frame(center_col)
+        toolbar.pack(fill="x")
+
+        self.tool_buttons: List[tk.Widget] = []
+        for label, hex_color in PALETTE_COLORS:
+            btn = tk.Button(
+                toolbar,
+                text=label,
+                bg=f"#{hex_color}",
+                fg="#FFFFFF" if hex_color in ("000000", "E53935", "1E88E5", "8E24AA", "6D4C41") else "#000000",
+                width=4,
+                relief="raised",
+                command=lambda c=hex_color: self.on_select_color(c),
+            )
+            btn.pack(side="left", padx=1)
+            self.tool_buttons.append(btn)
+
+        self.eraser_btn = ttk.Button(
+            toolbar,
+            text="Tẩy",
+            width=5,
+            command=lambda: self.on_select_color("FFFFFF"),
+        )
+        self.eraser_btn.pack(side="left", padx=4)
+        self.tool_buttons.append(self.eraser_btn)
+
+        ttk.Label(toolbar, text="Nét:").pack(side="left", padx=(4, 2))
+        self.width_var = tk.StringVar(value="4")
+        self.width_spin = ttk.Spinbox(
+            toolbar,
+            from_=1,
+            to=20,
+            width=3,
+            textvariable=self.width_var,
+            command=self.on_change_width,
+        )
+        self.width_spin.pack(side="left")
+        self.tool_buttons.append(self.width_spin)
+
+        self.clear_btn = ttk.Button(toolbar, text="Xóa hết (CLEAR)", command=self.on_clear_canvas)
+        self.clear_btn.pack(side="right", padx=2)
+        self.tool_buttons.append(self.clear_btn)
+
         self.status_var = tk.StringVar(value="")
         self.status_lbl = ttk.Label(self, textvariable=self.status_var, foreground="#333333")
-        self.status_lbl.pack(fill="x", pady=(8, 0))
+        self.status_lbl.pack(fill="x", pady=(6, 0))
+
+    def _now_ms(self) -> float:
+        return time.monotonic() * 1000.0
+
+    def _can_draw_now(self) -> bool:
+        m = self.app.room_model
+        return (
+            m.in_room
+            and m.state == "DRAWING"
+            and m.drawer == self.app.username
+            and m.remaining_s > 0
+        )
+
+    def _active_viewport(self) -> Tuple[int, int, int, int]:
+        """Return (offset_x, offset_y, vp_w, vp_h) preserving a fixed 4:3 aspect ratio."""
+        w = max(1, self.canvas.winfo_width())
+        h = max(1, self.canvas.winfo_height())
+        if w <= 1 or h <= 1:
+            w, h = self.canvas_w, self.canvas_h
+        if w * 3 <= h * 4:
+            vp_w = w
+            vp_h = max(1, (w * 3) // 4)
+        else:
+            vp_h = h
+            vp_w = max(1, (h * 4) // 3)
+        ox = (w - vp_w) // 2
+        oy = (h - vp_h) // 2
+        return ox, oy, vp_w, vp_h
+
+    def _draw_stroke_item_on_canvas(self, item: StrokeItem) -> None:
+        if len(item.points) < 2:
+            return
+        ox, oy, vp_w, vp_h = self._active_viewport()
+        px_w = scale_stroke_width(item.width, vp_w)
+        hex_col = f"#{item.color}"
+
+        px_pts = [
+            (ox + norm_to_pixel(nx, ny, vp_w, vp_h)[0], oy + norm_to_pixel(nx, ny, vp_w, vp_h)[1])
+            for nx, ny in item.points
+        ]
+        # Single-point dot (or zero-length segment): use create_oval for cross-platform visibility.
+        if all(p == px_pts[0] for p in px_pts):
+            cx, cy = px_pts[0]
+            r = max(1.0, px_w / 2.0)
+            self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill=hex_col, outline=hex_col)
+            return
+
+        flat: List[int] = []
+        for x, y in px_pts:
+            flat.extend((x, y))
+        self.canvas.create_line(
+            *flat,
+            fill=hex_col,
+            width=px_w,
+            capstyle=tk.ROUND,
+            joinstyle=tk.ROUND,
+        )
+
+    def redraw_all_strokes(self) -> None:
+        self.canvas.delete("all")
+        for stroke in self.app.room_model.strokes:
+            self._draw_stroke_item_on_canvas(stroke)
+
+    def _on_local_batch_emitted(self, item: StrokeItem) -> None:
+        self.app.room_model.strokes.append(item)
+
+    def _schedule_batch_tick(self) -> None:
+        if self._batch_timer_id is not None:
+            return
+
+        def _on_tick() -> None:
+            self._batch_timer_id = None
+            if not self._can_draw_now():
+                self.batcher.cancel()
+                return
+            self.batcher.tick(self._now_ms())
+            if self.batcher.dragging:
+                self._schedule_batch_tick()
+
+        self._batch_timer_id = self.app.root.after(30, _on_tick)
+
+    def cancel_active_stroke(self) -> None:
+        if self._batch_timer_id is not None:
+            try:
+                self.app.root.after_cancel(self._batch_timer_id)
+            except Exception:
+                pass
+            self._batch_timer_id = None
+        self.batcher.cancel()
+
+    def _event_to_norm(self, event) -> Tuple[int, int]:
+        ox, oy, vp_w, vp_h = self._active_viewport()
+        return pixel_to_norm(event.x - ox, event.y - oy, vp_w, vp_h)
+
+    def _sync_width_from_spin(self) -> int:
+        try:
+            w = int(self.width_var.get().strip())
+        except ValueError:
+            w = 4
+        return max(1, min(20, w))
+
+    def _on_canvas_press(self, event) -> None:
+        if not self._can_draw_now():
+            return
+        nx, ny = self._event_to_norm(event)
+        self.batcher.start_stroke(
+            nx,
+            ny,
+            color=self.batcher.color,
+            width=self._sync_width_from_spin(),
+            now_ms=self._now_ms(),
+        )
+        self._schedule_batch_tick()
+
+    def _on_canvas_motion(self, event) -> None:
+        if not self._can_draw_now() or not self.batcher.dragging:
+            return
+        nx, ny = self._event_to_norm(event)
+        seg = self.batcher.add_point(nx, ny, now_ms=self._now_ms())
+        if seg is not None:
+            p0, p1 = seg
+            self._draw_stroke_item_on_canvas(
+                StrokeItem(color=self.batcher.color, width=self.batcher.width, points=[p0, p1])
+            )
+
+    def _on_canvas_release(self, event) -> None:
+        if not self.batcher.dragging:
+            return
+        if self._can_draw_now():
+            nx, ny = self._event_to_norm(event)
+            seg = self.batcher.add_point(nx, ny, now_ms=self._now_ms())
+            if seg is not None:
+                p0, p1 = seg
+                self._draw_stroke_item_on_canvas(
+                    StrokeItem(color=self.batcher.color, width=self.batcher.width, points=[p0, p1])
+                )
+            dot = self.batcher.end_stroke(now_ms=self._now_ms())
+            if dot is not None:
+                self._draw_stroke_item_on_canvas(
+                    StrokeItem(color=self.batcher.color, width=self.batcher.width, points=[dot, dot])
+                )
+        else:
+            self.batcher.cancel()
+
+    def _on_canvas_configure(self, _event) -> None:
+        if self.app.room_model.in_room:
+            self.redraw_all_strokes()
+
+    def on_select_color(self, hex_color: str) -> None:
+        # Flush any in-progress points before changing color (do not cancel!)
+        self.batcher.change_tool(color=hex_color, now_ms=self._now_ms())
+
+    def on_change_width(self) -> None:
+        self.batcher.change_tool(width=self._sync_width_from_spin(), now_ms=self._now_ms())
+
+    def on_clear_canvas(self) -> None:
+        if not self._can_draw_now():
+            return
+        self.cancel_active_stroke()
+        self.app.room_model.strokes.clear()
+        self.canvas.delete("all")
+        self.app.client.send_no_reply("CLEAR")
 
     def set_busy(self, busy: bool) -> None:
         if busy:
@@ -428,6 +681,7 @@ class RoomFrame(ttk.Frame):
         else:
             self.leave_btn.configure(state="normal")
             self._update_start_btn()
+        self._update_drawing_tools()
 
     def set_status(self, text: str, is_error: bool = False) -> None:
         self.status_var.set(text)
@@ -444,10 +698,21 @@ class RoomFrame(ttk.Frame):
         )
         self.start_btn.configure(state="normal" if can_start else "disabled")
 
+    def _update_drawing_tools(self) -> None:
+        state = "normal" if self._can_draw_now() else "disabled"
+        for w in self.tool_buttons:
+            try:
+                w.configure(state=state)
+            except Exception:
+                pass
+
     def render_from_model(self) -> None:
         m = self.app.room_model
         if not m.in_room:
             return
+        if not self._can_draw_now():
+            self.cancel_active_stroke()
+
         self.title_lbl.configure(
             text=f"Phòng #{m.room_id}: {m.name}  |  Trạng thái: {m.state}"
         )
@@ -455,23 +720,25 @@ class RoomFrame(ttk.Frame):
         for p in m.players:
             tags = []
             if p == m.host:
-                tags.append("Chủ phòng")
+                tags.append("Chủ")
             if m.drawer and p == m.drawer:
-                tags.append("Đang vẽ")
-            suffix = f" ({', '.join(tags)})" if tags else ""
+                tags.append("Vẽ")
+            suffix = f" [{', '.join(tags)}]" if tags else ""
             self.players_list.insert(tk.END, f"{p}{suffix}")
 
         details = [
             f"Chủ phòng: {m.host}",
             f"Số người: {len(m.players)} / {m.max_players}",
-            f"Số vòng: {m.rounds}  |  Thời gian vẽ: {m.draw_time} giây",
+            f"Số vòng: {m.rounds} | Vẽ: {m.draw_time}s",
         ]
         if m.state != "LOBBY":
-            details.append(f"Vòng hiện tại: {m.round_no}  |  Người vẽ: {m.drawer or '-'}")
+            details.append(f"Vòng: {m.round_no} | Người vẽ: {m.drawer or '-'}")
             if m.word_hint:
-                details.append(f"Từ / Gợi ý: {m.word_hint}  |  Còn lại: {m.remaining_s}s")
+                details.append(f"Từ/Gợi ý: {m.word_hint} ({m.remaining_s}s)")
         self.info_var.set("\n".join(details))
         self._update_start_btn()
+        self._update_drawing_tools()
+        self.redraw_all_strokes()
 
     def on_start_game(self) -> None:
         if self.app.busy:
@@ -490,6 +757,7 @@ class RoomFrame(ttk.Frame):
     def on_leave_room(self) -> None:
         if self.app.busy:
             return
+        self.cancel_active_stroke()
         self.app.set_busy(True)
 
         def _done(resp: Response) -> None:
@@ -506,10 +774,17 @@ class RoomFrame(ttk.Frame):
 class NetSketchApp:
     """Top-level controller coordinating Tkinter frames, RoomModel, and NetSketchClient."""
 
-    def __init__(self, root: tk.Tk, host: str = "127.0.0.1", port: int = 9000) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        host: str = "127.0.0.1",
+        port: int = 9000,
+        canvas_width: int = 480,
+    ) -> None:
         self.root = root
         self.default_host = host
         self.default_port = port
+        self.canvas_width = canvas_width
         self.username = ""
         self.session_id = ""
         self.busy = False
@@ -522,7 +797,9 @@ class NetSketchApp:
         )
 
         self.root.title("netsketch")
-        self.root.geometry("760x480")
+        win_w = max(620, self.canvas_width + 240)
+        win_h = max(460, int((self.canvas_width * 3) // 4) + 140)
+        self.root.geometry(f"{win_w}x{win_h}")
         self.root.protocol("WM_DELETE_WINDOW", self.on_window_close)
 
         self.container = ttk.Frame(self.root)
@@ -581,6 +858,14 @@ class NetSketchApp:
             self.room_frame.render_from_model()
             return
 
+        if ev.name == "STROKE" and self.active_frame is self.room_frame and len( self.room_model.strokes ) > 0:
+            self.room_frame._draw_stroke_item_on_canvas(self.room_model.strokes[-1])
+            return
+
+        if ev.name == "CLEAR" and self.active_frame is self.room_frame:
+            self.room_frame.canvas.delete("all")
+            return
+
         if changed and self.active_frame is self.room_frame:
             self.room_frame.render_from_model()
             return
@@ -589,6 +874,10 @@ class NetSketchApp:
         logger.debug("Unhandled or passive event in current view: %s", ev.name)
 
     def on_async_error(self, resp: Response) -> None:
+        # Late STROKE/CLEAR/GUESS/CHOOSE_WORD errors due to network race are logged silently.
+        if resp.code in SILENT_ASYNC_CODES:
+            logger.debug("Ignored late/race gameplay error %d: %s", resp.code, resp.args)
+            return
         msg = format_error_vi(resp.code, resp.args[0] if resp.args else "")
         if self.active_frame is self.room_frame:
             self.room_frame.set_status(msg, is_error=True)
@@ -598,6 +887,7 @@ class NetSketchApp:
             self.auth_frame.set_status(msg, is_error=True)
 
     def on_disconnect(self, reason: str) -> None:
+        self.room_frame.cancel_active_stroke()
         self.set_busy(False)
         self.username = ""
         self.session_id = ""
@@ -606,6 +896,7 @@ class NetSketchApp:
         self.auth_frame.set_status(f"Đã ngắt kết nối khỏi máy chủ ({reason}).", is_error=True)
 
     def on_window_close(self) -> None:
+        self.room_frame.cancel_active_stroke()
         self.client.close(notify=False)
         self.root.destroy()
 
@@ -614,10 +905,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="netsketch Tkinter client")
     parser.add_argument("--host", default="127.0.0.1", help="Server host")
     parser.add_argument("--port", type=int, default=9000, help="Server port")
+    parser.add_argument("--canvas-w", type=int, default=480, help="Canvas width in pixels (4:3 aspect)")
     args = parser.parse_args()
 
     root = tk.Tk()
-    NetSketchApp(root, host=args.host, port=args.port)
+    NetSketchApp(root, host=args.host, port=args.port, canvas_width=args.canvas_w)
     root.mainloop()
 
 

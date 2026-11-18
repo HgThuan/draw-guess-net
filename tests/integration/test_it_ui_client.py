@@ -26,10 +26,11 @@ if str(UI_DIR) not in sys.path:
     sys.path.insert(0, str(UI_DIR))
 
 from netsketch import (  # noqa: E402
-     Event,
+    Event,
     NetSketchClient,
     Response,
     RoomModel,
+    StrokeBatcher,
     calc_total_pages,
     format_error_vi,
     parse_room_list,
@@ -326,6 +327,79 @@ def test_real_server_two_ui_clients_full_lobby_and_game_end_flow(server_factory)
         _drive_until([c1, c2], lambda: len(disc2) == 1, timeout=4.0)
         assert disc2 == ["KICK:IDLE"]
         assert c1.connected and c1.pong_count >= 5
+    finally:
+        c1.close()
+        c2.close()
+
+
+def test_real_server_stroke_batcher_replay_and_clear(server_factory):
+    import random
+
+    srv = server_factory(extra_args=["--idle-timeout", "30"])
+    m1, m2 = RoomModel(), RoomModel()
+    errs1, errs2 = [], []
+
+    c1 = NetSketchClient(on_event=m1.apply_event, on_async_error=errs1.append)
+    c2 = NetSketchClient(on_event=m2.apply_event, on_async_error=errs2.append)
+
+    try:
+        assert c1.connect("127.0.0.1", srv.port)
+        assert c2.connect("127.0.0.1", srv.port)
+        _drive_until([c1, c2], lambda: c1.hello_received and c2.hello_received)
+
+        done: dict[str, Response] = {}
+        c1.send_cmd("REGISTER|alice|Secret123", lambda r: done.setdefault("r1", r))
+        c1.send_cmd("LOGIN|alice|Secret123", lambda r: done.setdefault("l1", r))
+        c2.send_cmd("REGISTER|bob|Secret123", lambda r: done.setdefault("r2", r))
+        c2.send_cmd("LOGIN|bob|Secret123", lambda r: done.setdefault("l2", r))
+        _drive_until([c1, c2], lambda: len(done) == 4)
+
+        c1.send_cmd("CREATE_ROOM|CanvasRoom|4|1|60", lambda r: done.setdefault("cr", r))
+        _drive_until([c1, c2], lambda: m1.in_room)
+        c2.send_cmd("JOIN_ROOM|1", lambda r: done.setdefault("jr", r))
+        _drive_until([c1, c2], lambda: m2.in_room and "bob" in m1.players)
+
+        c1.send_cmd("START", lambda r: done.setdefault("st", r))
+        _drive_until([c1, c2], lambda: m1.state == "CHOOSING_WORD" and m2.state == "CHOOSING_WORD")
+
+        c1.send_cmd("CHOOSE_WORD|1", lambda r: done.setdefault("cw", r))
+        _drive_until([c1, c2], lambda: m1.state == "DRAWING" and m2.state == "DRAWING")
+
+        # Replay 100 random multi-point drags through StrokeBatcher onto the real C server
+        rng = random.Random(20261118)
+        batcher = StrokeBatcher(
+            send_line_fn=c1.send_no_reply,
+            on_local_batch=m1.strokes.append,
+        )
+        now = 0.0
+        for _ in range(100):
+            color = rng.choice(["000000", "E53935", "43A047", "1E88E5", "FFFFFF"])
+            width = rng.randint(1, 20)
+            batcher.start_stroke(
+                rng.randint(-20, 1020),
+                rng.randint(-20, 1020),
+                color=color,
+                width=width,
+                now_ms=now,
+            )
+            for _ in range(rng.randint(0, 50)):
+                now += rng.choice([5.0, 15.0, 35.0])
+                batcher.add_point(rng.randint(-20, 1020), rng.randint(-20, 1020), now_ms=now)
+            batcher.end_stroke(now_ms=now + 1.0)
+            c1.poll_once()
+            c2.poll_once()
+
+        expected_count = len(m1.strokes)
+        assert expected_count >= 100
+        _drive_until([c1, c2], lambda: len(m2.strokes) == expected_count, timeout=5.0)
+        assert m2.strokes == m1.strokes
+        assert errs1 == [] and errs2 == []
+
+        # Drawer sends CLEAR -> guesser's strokes are wiped
+        m1.strokes.clear()
+        c1.send_no_reply("CLEAR")
+        _drive_until([c1, c2], lambda: len(m2.strokes) == 0)
+        assert errs1 == [] and errs2 == []
     finally:
         c1.close()
         c2.close()
