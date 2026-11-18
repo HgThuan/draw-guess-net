@@ -23,6 +23,7 @@ from netsketch import (
     StrokeItem,
     calc_total_pages,
     format_error_vi,
+    format_word_hint,
     norm_to_pixel,
     parse_room_list,
     pixel_to_norm,
@@ -402,14 +403,16 @@ class LobbyFrame(ttk.Frame):
 
 
 class RoomFrame(ttk.Frame):
-    """Room waiting & interactive drawing canvas screen driven strictly by RoomModel."""
+    """Room waiting, drawing canvas, word choice, guess/chat, and scoreboard screen."""
 
     def __init__(self, master: tk.Widget, app: "NetSketchApp") -> None:
-        super().__init__(master, padding=12)
+        super().__init__(master, padding=10)
         self.app = app
         self.canvas_w = max(240, int(app.canvas_width))
         self.canvas_h = int((self.canvas_w * 3) // 4)
         self._batch_timer_id = None
+        self._clock_timer_id = None
+        self._rendered_feed_len = 0
 
         self.batcher = StrokeBatcher(
             send_line_fn=self.app.client.send_no_reply,
@@ -417,36 +420,64 @@ class RoomFrame(ttk.Frame):
         )
 
         header = ttk.Frame(self)
-        header.pack(fill="x", pady=(0, 8))
+        header.pack(fill="x", pady=(0, 6))
 
-        self.title_lbl = ttk.Label(header, text="", font=("sans-serif", 12, "bold"))
+        self.title_lbl = ttk.Label(header, text="", font=("sans-serif", 11, "bold"))
         self.title_lbl.pack(side="left")
 
         self.leave_btn = ttk.Button(header, text="Rời phòng", command=self.on_leave_room)
         self.leave_btn.pack(side="right")
 
-        self.start_btn = ttk.Button(header, text="Bắt đầu ván (START)", command=self.on_start_game)
-        self.start_btn.pack(side="right", padx=6)
+        self.start_btn = ttk.Button(header, text="Bắt đầu (START)", command=self.on_start_game)
+        self.start_btn.pack(side="right", padx=4)
+
+        self.score_btn = ttk.Button(header, text="Bảng điểm", command=self.on_request_scoreboard)
+        self.score_btn.pack(side="right", padx=4)
+
+        self.clock_lbl = ttk.Label(header, text="", font=("sans-serif", 11, "bold"), foreground="#b00020")
+        self.clock_lbl.pack(side="right", padx=8)
+
+        # Banner for word hint / current word
+        self.hint_var = tk.StringVar(value="")
+        self.hint_lbl = ttk.Label(self, textvariable=self.hint_var, font=("monospace", 12, "bold"))
+        self.hint_lbl.pack(fill="x", pady=(0, 4))
+
+        # Word choice bar (only shown to drawer during CHOOSING_WORD)
+        self.choose_bar = ttk.Frame(self)
+        ttk.Label(self.choose_bar, text="Chọn từ để vẽ:", font=("sans-serif", 10, "bold")).pack(side="left", padx=4)
+        self.word_btns: List[ttk.Button] = []
+        for idx in (1, 2, 3):
+            b = ttk.Button(self.choose_bar, text="", command=lambda i=idx: self.on_choose_word(i))
+            b.pack(side="left", padx=4)
+            self.word_btns.append(b)
+
+        # Final ranking banner (persists after GAME_END + ROOM_INFO until dismissed or next GAME_START)
+        self.ranking_box = ttk.LabelFrame(self, text="Bảng xếp hạng cuối ván", padding=6)
+        self.ranking_var = tk.StringVar(value="")
+        ttk.Label(self.ranking_box, textvariable=self.ranking_var, justify="left", font=("sans-serif", 10, "bold")).pack(
+            side="left", fill="x", expand=True
+        )
+        ttk.Button(self.ranking_box, text="Đóng", command=self.on_dismiss_ranking).pack(side="right", padx=4)
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True)
 
-        # Left column: Players & room details
+        # Left column: Players & live scores
         left_col = ttk.Frame(body)
         left_col.pack(side="left", fill="y", padx=(0, 8))
 
-        players_box = ttk.LabelFrame(left_col, text="Người chơi", padding=6)
+        players_box = ttk.LabelFrame(left_col, text="Người chơi & Điểm", padding=4)
         players_box.pack(fill="both", expand=True)
 
-        self.players_list = tk.Listbox(players_box, width=22, height=10)
+        self.players_list = tk.Listbox(players_box, width=24, height=11)
         self.players_list.pack(fill="both", expand=True)
 
-        info_box = ttk.LabelFrame(left_col, text="Thông tin ván", padding=6)
-        info_box.pack(fill="x", pady=(6, 0))
+        info_box = ttk.LabelFrame(left_col, text="Thông tin", padding=4)
+        info_box.pack(fill="x", pady=(4, 0))
         self.info_var = tk.StringVar(value="")
         ttk.Label(info_box, textvariable=self.info_var, justify="left").pack(anchor="nw")
 
-        # Center/Right column: Fixed-aspect drawing canvas + toolbar
+        # Center/Right column: Canvas + Toolbar + Compact Guess/Chat below canvas
         center_col = ttk.Frame(body)
         center_col.pack(side="left", fill="both", expand=True)
 
@@ -459,14 +490,14 @@ class RoomFrame(ttk.Frame):
             highlightbackground="#888888",
             cursor="crosshair",
         )
-        self.canvas.pack(anchor="center", pady=(0, 6))
+        self.canvas.pack(anchor="center", pady=(0, 4))
         self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
         self.canvas.bind("<B1-Motion>", self._on_canvas_motion)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
         toolbar = ttk.Frame(center_col)
-        toolbar.pack(fill="x")
+        toolbar.pack(fill="x", pady=(0, 4))
 
         self.tool_buttons: List[tk.Widget] = []
         for label, hex_color in PALETTE_COLORS:
@@ -485,13 +516,13 @@ class RoomFrame(ttk.Frame):
         self.eraser_btn = ttk.Button(
             toolbar,
             text="Tẩy",
-            width=5,
+            width=4,
             command=lambda: self.on_select_color("FFFFFF"),
         )
-        self.eraser_btn.pack(side="left", padx=4)
+        self.eraser_btn.pack(side="left", padx=2)
         self.tool_buttons.append(self.eraser_btn)
 
-        ttk.Label(toolbar, text="Nét:").pack(side="left", padx=(4, 2))
+        ttk.Label(toolbar, text="Nét:").pack(side="left", padx=(2, 1))
         self.width_var = tk.StringVar(value="4")
         self.width_spin = ttk.Spinbox(
             toolbar,
@@ -504,13 +535,46 @@ class RoomFrame(ttk.Frame):
         self.width_spin.pack(side="left")
         self.tool_buttons.append(self.width_spin)
 
-        self.clear_btn = ttk.Button(toolbar, text="Xóa hết (CLEAR)", command=self.on_clear_canvas)
-        self.clear_btn.pack(side="right", padx=2)
+        self.clear_btn = ttk.Button(toolbar, text="Xóa (CLEAR)", command=self.on_clear_canvas)
+        self.clear_btn.pack(side="right", padx=1)
         self.tool_buttons.append(self.clear_btn)
+
+        # Compact Guess & Chat panel placed below canvas so window width fits 3-up on 1920px screens
+        chat_box = ttk.LabelFrame(center_col, text="Đoán từ (GUESS) & Trò chuyện (CHAT)", padding=4)
+        chat_box.pack(fill="both", expand=True)
+
+        self.feed_text = tk.Text(chat_box, height=6, state="disabled", wrap="word", font=("sans-serif", 9))
+        self.feed_text.pack(fill="both", expand=True, pady=(0, 4))
+        self.feed_text.tag_configure("system", foreground="#555555")
+        self.feed_text.tag_configure("chat", foreground="#0d47a1")
+        self.feed_text.tag_configure("solved_chat", foreground="#6a1b9a")
+        self.feed_text.tag_configure("guess_wrong", foreground="#333333")
+        self.feed_text.tag_configure("guess_correct", foreground="#1b5e20", font=("sans-serif", 9, "bold"))
+
+        entry_row = ttk.Frame(chat_box)
+        entry_row.pack(fill="x")
+
+        self.input_var = tk.StringVar()
+        self.input_entry = ttk.Entry(entry_row, textvariable=self.input_var)
+        self.input_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.input_entry.bind("<Return>", self.on_enter_pressed)
+
+        self.guess_btn = ttk.Button(entry_row, text="Đoán (GUESS)", command=self.on_send_guess)
+        self.guess_btn.pack(side="left", padx=2)
+
+        self.chat_btn = ttk.Button(entry_row, text="Chat (CHAT)", command=self.on_send_chat)
+        self.chat_btn.pack(side="left", padx=2)
+
+        ttk.Label(
+            chat_box,
+            text="Lưu ý: Khi đang đoán, nhấn Enter sẽ tính là một lần Đoán từ (GUESS); còn lại sẽ gửi Chat.",
+            foreground="#666666",
+            font=("sans-serif", 8),
+        ).pack(anchor="w", pady=(2, 0))
 
         self.status_var = tk.StringVar(value="")
         self.status_lbl = ttk.Label(self, textvariable=self.status_var, foreground="#333333")
-        self.status_lbl.pack(fill="x", pady=(6, 0))
+        self.status_lbl.pack(fill="x", pady=(4, 0))
 
     def _now_ms(self) -> float:
         return time.monotonic() * 1000.0
@@ -521,8 +585,27 @@ class RoomFrame(ttk.Frame):
             m.in_room
             and m.state == "DRAWING"
             and m.drawer == self.app.username
-            and m.remaining_s > 0
+            and m.current_remaining_s() > 0
         )
+
+    def _can_guess_now(self) -> bool:
+        m = self.app.room_model
+        return (
+            not self.app.busy
+            and m.in_room
+            and m.state == "DRAWING"
+            and m.drawer != self.app.username
+            and self.app.username not in m.guessed_users
+            and m.current_remaining_s() > 0
+        )
+
+    def _can_chat_now(self) -> bool:
+        m = self.app.room_model
+        if self.app.busy or not m.in_room:
+            return False
+        if m.state in ("CHOOSING_WORD", "DRAWING") and m.drawer == self.app.username:
+            return False
+        return True
 
     def _active_viewport(self) -> Tuple[int, int, int, int]:
         """Return (offset_x, offset_y, vp_w, vp_h) preserving a fixed 4:3 aspect ratio."""
@@ -599,7 +682,35 @@ class RoomFrame(ttk.Frame):
             except Exception:
                 pass
             self._batch_timer_id = None
+        if self._clock_timer_id is not None:
+            try:
+                self.app.root.after_cancel(self._clock_timer_id)
+            except Exception:
+                pass
+            self._clock_timer_id = None
         self.batcher.cancel()
+
+    def _schedule_clock_tick(self) -> None:
+        if self._clock_timer_id is not None:
+            return
+
+        def _tick_clock() -> None:
+            self._clock_timer_id = None
+            m = self.app.room_model
+            if not m.in_room:
+                return
+            rem = m.current_remaining_s()
+            if m.state in ("CHOOSING_WORD", "DRAWING"):
+                self.clock_lbl.configure(text=f"Thời gian: {rem}s")
+                if rem == 0 and self.batcher.dragging:
+                    self.batcher.cancel()
+                self._update_drawing_tools()
+                self._update_guess_chat_buttons()
+                self._clock_timer_id = self.app.root.after(200, _tick_clock)
+            else:
+                self.clock_lbl.configure(text="")
+
+        self._clock_timer_id = self.app.root.after(200, _tick_clock)
 
     def _event_to_norm(self, event) -> Tuple[int, int]:
         ox, oy, vp_w, vp_h = self._active_viewport()
@@ -678,10 +789,13 @@ class RoomFrame(ttk.Frame):
         if busy:
             self.leave_btn.configure(state="disabled")
             self.start_btn.configure(state="disabled")
+            self.score_btn.configure(state="disabled")
         else:
             self.leave_btn.configure(state="normal")
+            self.score_btn.configure(state="normal")
             self._update_start_btn()
         self._update_drawing_tools()
+        self._update_guess_chat_buttons()
 
     def set_status(self, text: str, is_error: bool = False) -> None:
         self.status_var.set(text)
@@ -706,39 +820,197 @@ class RoomFrame(ttk.Frame):
             except Exception:
                 pass
 
+    def _update_guess_chat_buttons(self) -> None:
+        self.guess_btn.configure(state="normal" if self._can_guess_now() else "disabled")
+        self.chat_btn.configure(state="normal" if self._can_chat_now() else "disabled")
+
+    def _sync_feed_widget(self) -> None:
+        m = self.app.room_model
+        if len(m.feed) < self._rendered_feed_len:
+            self.feed_text.configure(state="normal")
+            self.feed_text.delete("1.0", tk.END)
+            self.feed_text.configure(state="disabled")
+            self._rendered_feed_len = 0
+
+        if len(m.feed) == self._rendered_feed_len:
+            return
+
+        self.feed_text.configure(state="normal")
+        for item in m.feed[self._rendered_feed_len :]:
+            self.feed_text.insert(tk.END, item.text + "\n", item.kind)
+        self.feed_text.see(tk.END)
+        self.feed_text.configure(state="disabled")
+        self._rendered_feed_len = len(m.feed)
+
     def render_from_model(self) -> None:
         m = self.app.room_model
         if not m.in_room:
             return
         if not self._can_draw_now():
-            self.cancel_active_stroke()
+            self.batcher.cancel()
 
+        round_str = f"  |  Vòng: {m.round_no}/{m.rounds}" if m.state != "LOBBY" and m.round_no > 0 else ""
         self.title_lbl.configure(
-            text=f"Phòng #{m.room_id}: {m.name}  |  Trạng thái: {m.state}"
+            text=f"Phòng #{m.room_id}: {m.name}{round_str}  |  {m.state}"
         )
+
+        # Countdown clock
+        rem = m.current_remaining_s()
+        if m.state in ("CHOOSING_WORD", "DRAWING"):
+            self.clock_lbl.configure(text=f"Thời gian: {rem}s")
+            self._schedule_clock_tick()
+        else:
+            self.clock_lbl.configure(text="")
+
+        # Word / Hint banner
+        is_drawer = (m.drawer == self.app.username)
+        if m.state == "DRAWING" and m.word_hint:
+            formatted = format_word_hint(m.word_hint, is_drawer=is_drawer)
+            prefix = "Từ cần vẽ" if is_drawer else "Gợi ý từ khóa"
+            self.hint_var.set(f"{prefix}:  {formatted}")
+        elif m.state == "CHOOSING_WORD":
+            self.hint_var.set(f"Người vẽ '{m.drawer}' đang chọn từ khóa...")
+        elif m.state == "TURN_END" and m.last_turn_word:
+            self.hint_var.set(f"Đáp án lượt vừa rồi:  {m.last_turn_word}")
+        else:
+            self.hint_var.set("")
+
+        # Word choice bar for drawer
+        if m.state == "CHOOSING_WORD" and is_drawer and len(m.word_options) >= 3:
+            for i in range(3):
+                self.word_btns[i].configure(text=f"[{i + 1}] {m.word_options[i]}", state="normal")
+            self.choose_bar.pack(fill="x", pady=(0, 4), before=self.canvas.master.master)
+        else:
+            self.choose_bar.pack_forget()
+
+        # Final ranking banner (preserved after GAME_END + ROOM_INFO until dismissed or next GAME_START)
+        if m.final_ranking:
+            title_reason = (
+                "Ván kết thúc sớm vì không đủ người chơi"
+                if m.game_end_reason == "NOT_ENOUGH_PLAYERS"
+                else "Bảng xếp hạng cuối ván (Hoàn tất)"
+            )
+            self.ranking_box.configure(text=title_reason)
+            lines = [f"Hạng {idx + 1}: {u} — {sc} điểm" for idx, (u, sc) in enumerate(m.final_ranking)]
+            self.ranking_var.set("   |   ".join(lines))
+            self.ranking_box.pack(fill="x", pady=(0, 4), before=self.canvas.master.master)
+        else:
+            self.ranking_box.pack_forget()
+
+        # Players list with live scores and safe ASCII/Vietnamese tags
         self.players_list.delete(0, tk.END)
         for p in m.players:
+            sc = m.scores.get(p, 0)
+            delta = m.turn_deltas.get(p, 0)
+            delta_str = f" (+{delta})" if delta > 0 else ""
             tags = []
             if p == m.host:
                 tags.append("Chủ")
             if m.drawer and p == m.drawer:
                 tags.append("Vẽ")
+            if p in m.guessed_users:
+                tags.append("Đã đoán")
             suffix = f" [{', '.join(tags)}]" if tags else ""
-            self.players_list.insert(tk.END, f"{p}{suffix}")
+            self.players_list.insert(tk.END, f"{p}: {sc}{delta_str}{suffix}")
 
         details = [
             f"Chủ phòng: {m.host}",
-            f"Số người: {len(m.players)} / {m.max_players}",
+            f"Người chơi: {len(m.players)}/{m.max_players}",
             f"Số vòng: {m.rounds} | Vẽ: {m.draw_time}s",
         ]
-        if m.state != "LOBBY":
-            details.append(f"Vòng: {m.round_no} | Người vẽ: {m.drawer or '-'}")
-            if m.word_hint:
-                details.append(f"Từ/Gợi ý: {m.word_hint} ({m.remaining_s}s)")
         self.info_var.set("\n".join(details))
+
         self._update_start_btn()
         self._update_drawing_tools()
+        self._update_guess_chat_buttons()
+        self._sync_feed_widget()
         self.redraw_all_strokes()
+
+    def on_choose_word(self, index_1based: int) -> None:
+        if self.app.busy:
+            return
+        for b in self.word_btns:
+            b.configure(state="disabled")
+        self.app.set_busy(True)
+
+        def _done(resp: Response) -> None:
+            self.app.set_busy(False)
+            if not resp.ok and resp.code not in SILENT_ASYNC_CODES:
+                self.set_status(format_error_vi(resp.code, resp.args[0] if resp.args else ""), is_error=True)
+
+        self.app.client.send_cmd(f"CHOOSE_WORD|{index_1based}", _done)
+
+    def on_dismiss_ranking(self) -> None:
+        self.app.room_model.dismiss_final_ranking()
+        self.ranking_box.pack_forget()
+
+    def on_request_scoreboard(self) -> None:
+        if self.app.busy or not self.app.room_model.in_room:
+            return
+        self.app.set_busy(True)
+
+        def _done(resp: Response) -> None:
+            self.app.set_busy(False)
+            if resp.ok:
+                self.app.room_model.apply_scoreboard(resp.args)
+                self.render_from_model()
+                self.set_status("Đã cập nhật bảng điểm từ máy chủ.", is_error=False)
+            else:
+                self.set_status(format_error_vi(resp.code, resp.args[0] if resp.args else ""), is_error=True)
+
+        self.app.client.send_cmd("SCOREBOARD", _done)
+
+    def on_enter_pressed(self, _event) -> None:
+        if self._can_guess_now():
+            self.on_send_guess()
+        elif self._can_chat_now():
+            self.on_send_chat()
+
+    def on_send_guess(self) -> None:
+        if not self._can_guess_now():
+            return
+        text = self.input_var.get().strip(" ")
+        if not text:
+            return
+        if len(text.encode("utf-8", errors="replace")) > 200:
+            self.set_status("Nội dung đoán không được vượt quá 200 byte", is_error=True)
+            return
+
+        self.app.set_busy(True)
+
+        def _done(resp: Response) -> None:
+            self.app.set_busy(False)
+            if resp.ok:
+                # Model & feed are updated strictly from GUESS_CORRECT / GUESS_WRONG events
+                self.input_var.set("")
+                self.set_status("", is_error=False)
+            elif resp.code not in SILENT_ASYNC_CODES:
+                self.set_status(format_error_vi(resp.code, resp.args[0] if resp.args else ""), is_error=True)
+
+        self.app.client.send_cmd(f"GUESS|{text}", _done)
+
+    def on_send_chat(self) -> None:
+        if not self._can_chat_now():
+            return
+        text = self.input_var.get().strip(" ")
+        if not text:
+            return
+        if len(text.encode("utf-8", errors="replace")) > 200:
+            self.set_status("Tin nhắn không được vượt quá 200 byte", is_error=True)
+            return
+
+        self.app.set_busy(True)
+
+        def _done(resp: Response) -> None:
+            self.app.set_busy(False)
+            if resp.ok:
+                # Feed is updated strictly from CHAT event broadcast by server
+                self.input_var.set("")
+                self.set_status("", is_error=False)
+            elif resp.code == 306 or resp.code not in SILENT_ASYNC_CODES:
+                self.set_status(format_error_vi(resp.code, resp.args[0] if resp.args else ""), is_error=True)
+
+        self.app.client.send_cmd(f"CHAT|{text}", _done)
 
     def on_start_game(self) -> None:
         if self.app.busy:
@@ -905,7 +1177,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="netsketch Tkinter client")
     parser.add_argument("--host", default="127.0.0.1", help="Server host")
     parser.add_argument("--port", type=int, default=9000, help="Server port")
-    parser.add_argument("--canvas-w", type=int, default=480, help="Canvas width in pixels (4:3 aspect)")
+    parser.add_argument("--canvas-w", type=int, default=400, help="Canvas width in pixels (4:3 aspect, 400 fits 3 windows on 1920px)")
     args = parser.parse_args()
 
     root = tk.Tk()
