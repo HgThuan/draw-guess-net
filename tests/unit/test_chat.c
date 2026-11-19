@@ -181,14 +181,15 @@ static void test_chat_drawer_blocked_and_answer_filter(void **state)
     assert_int_equal(c[2]->out_len, 0);
     clear_all(c, 3);
 
-    /* Answer at the start, in the middle, in another case, or mixed with UTF-8 is blocked */
+    /* Answer at the start, in the middle, glued to other letters, or mixed with UTF-8 is blocked */
     const char *leaks[] = {
         "CHAT|cat is it",
         "CHAT|maybe a cat?",
         "CHAT|CAT",
+        "CHAT|catwowowoww",
         "CHAT|đáp án là cat nhé"
     };
-    for (size_t i = 0; i < 4; i++) {
+    for (size_t i = 0; i < sizeof(leaks) / sizeof(leaks[0]); i++) {
         dispatch_line(&s_srv, c[1], leaks[i]);
         assert_string_equal(c[1]->out, "ERR|306|chat blocked\n");
         assert_int_equal(c[0]->out_len, 0);
@@ -196,11 +197,11 @@ static void test_chat_drawer_blocked_and_answer_filter(void **state)
         clear_all(c, 3);
     }
 
-    /* Unrelated words containing the answer as a fragment pass */
-    dispatch_line(&s_srv, c[1], "CHAT|educate me");
-    assert_string_equal(c[1]->out, "OK\nCHAT|bob|educate me\n");
-    assert_string_equal(c[0]->out, "CHAT|bob|educate me\n");
-    assert_string_equal(c[2]->out, "CHAT|bob|educate me\n");
+    /* Unrelated chat without the answer passes */
+    dispatch_line(&s_srv, c[1], "CHAT|looks great");
+    assert_string_equal(c[1]->out, "OK\nCHAT|bob|looks great\n");
+    assert_string_equal(c[0]->out, "CHAT|bob|looks great\n");
+    assert_string_equal(c[2]->out, "CHAT|bob|looks great\n");
     clear_all(c, 3);
 }
 

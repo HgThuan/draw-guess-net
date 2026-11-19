@@ -10,11 +10,6 @@ static char to_lower_ascii(char c)
     return c;
 }
 
-static bool is_ascii_letter(char c)
-{
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-
 static bool is_space_char(char c)
 {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
@@ -203,25 +198,6 @@ bool words_match(const char *guess, const char *word)
     return true;
 }
 
-/* Whole-word search: a match glued to other letters ("educate") does not count. */
-static bool find_bounded(const char *nt, size_t lt, const char *nw, size_t lw)
-{
-    if (lw == 0 || lw > lt) {
-        return false;
-    }
-    for (size_t pos = 0; pos + lw <= lt; pos++) {
-        if (memcmp(nt + pos, nw, lw) != 0) {
-            continue;
-        }
-        bool left_ok = (pos == 0) || !is_ascii_letter(nt[pos - 1]);
-        bool right_ok = (pos + lw == lt) || !is_ascii_letter(nt[pos + lw]);
-        if (left_ok && right_ok) {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool words_contains(const char *text, const char *word)
 {
     char nw[WORD_MAX];
@@ -231,7 +207,7 @@ bool words_contains(const char *text, const char *word)
     if (lw == 0 || lt == 0) {
         return false;
     }
-    if (find_bounded(nt, lt, nw, lw)) {
+    if (strstr(nt, nw) != NULL) {
         return true;
     }
 
@@ -244,7 +220,7 @@ bool words_contains(const char *text, const char *word)
         }
     }
     joined[lj] = '\0';
-    return lj != lw && find_bounded(nt, lt, joined, lj);
+    return lj != lw && strstr(nt, joined) != NULL;
 }
 
 void words_make_hint(const char *word, char out[WORD_MAX])
