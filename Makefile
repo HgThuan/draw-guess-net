@@ -88,6 +88,11 @@ coverage: $(CLIENT_LIB) | $(COV_DIR) $(COV_HTML_DIR)
 		--fail-under-line 90 \
 		--html-details $(COV_HTML_DIR)/index.html \
 		--xml $(BUILD_DIR)/coverage.xml
+	gcovr -r . \
+		--exclude 'tests/.*' \
+		--exclude 'tools/.*' \
+		--exclude 'build/.*' \
+		--exclude 'server/src/main\.c'
 
 $(ASAN_SERVER_BIN): $(COMMON_SRCS) $(SERVER_SRCS) | $(ASAN_DIR)
 	$(CC) $(ASANFLAGS) $(INCLUDES) $^ -o $@
@@ -98,6 +103,24 @@ $(ASAN_UNIT_BIN): $(COMMON_SRCS) $(SERVER_LOGIC_SRCS) $(CLIENT_SRCS) $(TEST_SRCS
 asan: $(ASAN_SERVER_BIN) $(ASAN_UNIT_BIN) $(CLIENT_LIB)
 	./$(ASAN_UNIT_BIN)
 	pytest -q tests/integration --server $(ASAN_SERVER_BIN)
+
+CLIENTS       ?= 100
+DURATION      ?= 20
+SCENARIO      ?= ci
+LOADGEN_FLAGS ?=
+
+loadtest: $(SERVER_BIN)
+	@TMPDIR=$$(mktemp -d); \
+	./$(SERVER_BIN) --port 19090 --data-dir "$$TMPDIR" --words data/words.txt --choose-time 2 --turn-pause 1 --idle-timeout 120 & \
+	SPID=$$!; \
+	sleep 0.4; \
+	python3 tools/loadgen.py --host 127.0.0.1 --port 19090 --clients $(CLIENTS) --seed-users; \
+	python3 tools/loadgen.py --host 127.0.0.1 --port 19090 --clients $(CLIENTS) --duration $(DURATION) --scenario $(SCENARIO) --server-pid $$SPID $(LOADGEN_FLAGS); \
+	RC=$$?; \
+	kill -TERM $$SPID 2>/dev/null || true; \
+	wait $$SPID 2>/dev/null || true; \
+	rm -rf "$$TMPDIR"; \
+	exit $$RC
 
 clean:
 	rm -rf $(BUILD_DIR)
