@@ -64,3 +64,8 @@ jobs:
           name: coverage-report
           path: build/coverage/
           if-no-files-found: ignore
+
+      - name: Run lightweight load test (100 clients, 20s, main branch only)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          make loadtest CLIENTS=100 DURATION=20 SCENARIO=ci LOADGEN_FLAGS="--no-plots --fail-on-error"

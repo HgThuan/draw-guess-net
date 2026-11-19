@@ -238,7 +238,7 @@ int net_loop_init(NetLoop *nl, Server *s)
     addr.sin_port = htons((uint16_t)s->cfg.port);
 
     if (bind(nl->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
-        listen(nl->listen_fd, 128) < 0) {
+        listen(nl->listen_fd, 1024) < 0) {
         net_loop_cleanup(nl, s);
         return -1;
     }
