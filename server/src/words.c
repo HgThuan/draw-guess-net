@@ -73,9 +73,14 @@ static bool words_add_unique(WordList *wl, const char *raw)
         return false;
     }
     char clean[WORD_MAX];
-    size_t len = normalize_str(raw, clean, sizeof(clean), false, true);
+    size_t len = normalize_str(raw, clean, sizeof(clean), true, true);
     if (len == 0) {
         return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        if (!((clean[i] >= 'a' && clean[i] <= 'z') || clean[i] == ' ')) {
+            return false;
+        }
     }
     for (int i = 0; i < wl->count; i++) {
         if (words_match(wl->words[i], clean)) {
