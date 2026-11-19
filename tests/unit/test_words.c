@@ -87,18 +87,21 @@ static void test_words_match_contains_and_hint(void **state)
 
     /* words_match: case-insensitive, trims leading/trailing spaces only */
     assert_true(words_match("cat", "cat"));
-    assert_true(words_match("  CaT  ", "cat"));
+    assert_true(words_match("  CaT  ", "  cat  "));
     assert_true(words_match("  ICE Cream ", "ice cream"));
     assert_false(words_match("ice  cream", "ice cream"));
     assert_false(words_match("cat\t", "cat"));
+    assert_false(words_match("ca\x01", "cat"));
     assert_false(words_match("cat", "dog"));
     assert_false(words_match("", "cat"));
     assert_false(words_match(NULL, "cat"));
     assert_false(words_match("cat", NULL));
 
-    /* words_contains: word boundaries avoid false positive on "educate" */
-    assert_false(words_contains("I want to educate children.", "cat"));
-    assert_false(words_contains("scattered clouds", "cat"));
+    /* words_contains: substring match catches answers embedded in longer tokens */
+    assert_true(words_contains("camerawowowoww", "camera"));
+    assert_true(words_contains("xxxCAMERAxxx", "camera"));
+    assert_true(words_contains("I want to educate children.", "cat"));
+    assert_true(words_contains("scattered clouds", "cat"));
     assert_true(words_contains("I think the word is cat!", "cat"));
     assert_true(words_contains("CAT?", "cat"));
     assert_true(words_contains("(cat)", "cat"));
@@ -107,9 +110,11 @@ static void test_words_match_contains_and_hint(void **state)
     assert_false(words_contains("ice", "ice cream"));
     assert_true(words_contains("ice  cream", "ice cream"));
     assert_true(words_contains("I love ICECREAM", "ice cream"));
-    assert_false(words_contains("nice creamy", "ice cream"));
+    assert_true(words_contains("icecreammmm", "ice cream"));
+    assert_true(words_contains("nice creamy", "ice cream"));
     assert_true(words_contains("đáp án là CAT nhé", "cat"));
     assert_false(words_contains("c a t", "cat"));
+    assert_false(words_contains("ca t", "cat"));
     assert_false(words_contains(NULL, "cat"));
     assert_false(words_contains("cat", ""));
 
