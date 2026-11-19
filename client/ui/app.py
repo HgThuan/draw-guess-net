@@ -55,31 +55,28 @@ class AuthFrame(ttk.Frame):
         super().__init__(master, padding=24)
         self.app = app
 
-        title = ttk.Label(self, text="netsketch — Vẽ và Đoán Từ", font=(" sans-serif", 16, "bold"))
+        title = ttk.Label(self, text="netsketch — Vẽ và Đoán Từ", font=("sans-serif", 16, "bold"))
         title.grid(row=0, column=0, columnspan=2, pady=(0, 16))
 
-        ttk.Label(self, text="Máy chủ (Host):").grid(row=1, column=0, sticky="e", padx=6, pady=4)
-        self.host_var = tk.StringVar(value=app.default_host)
-        self.host_entry = ttk.Entry(self, textvariable=self.host_var, width=24)
-        self.host_entry.grid(row=1, column=1, sticky="w", padx=6, pady=4)
-
-        ttk.Label(self, text="Cổng (Port):").grid(row=2, column=0, sticky="e", padx=6, pady=4)
-        self.port_var = tk.StringVar(value=str(app.default_port))
-        self.port_entry = ttk.Entry(self, textvariable=self.port_var, width=10)
-        self.port_entry.grid(row=2, column=1, sticky="w", padx=6, pady=4)
-
-        ttk.Label(self, text="Tài khoản:").grid(row=3, column=0, sticky="e", padx=6, pady=4)
+        ttk.Label(self, text="Tài khoản:").grid(row=1, column=0, sticky="e", padx=6, pady=4)
         self.user_var = tk.StringVar()
         self.user_entry = ttk.Entry(self, textvariable=self.user_var, width=24)
-        self.user_entry.grid(row=3, column=1, sticky="w", padx=6, pady=4)
+        self.user_entry.grid(row=1, column=1, sticky="w", padx=6, pady=4)
 
-        ttk.Label(self, text="Mật khẩu:").grid(row=4, column=0, sticky="e", padx=6, pady=4)
+        ttk.Label(self, text="Mật khẩu:").grid(row=2, column=0, sticky="e", padx=6, pady=4)
+        pass_row = ttk.Frame(self)
+        pass_row.grid(row=2, column=1, sticky="w", padx=6, pady=4)
         self.pass_var = tk.StringVar()
-        self.pass_entry = ttk.Entry(self, textvariable=self.pass_var, show="*", width=24)
-        self.pass_entry.grid(row=4, column=1, sticky="w", padx=6, pady=4)
+        self._show_password = False
+        self.pass_entry = ttk.Entry(pass_row, textvariable=self.pass_var, show="*", width=20)
+        self.pass_entry.pack(side="left")
+        self.toggle_pass_btn = ttk.Button(
+            pass_row, text="Hiện", width=5, command=self.toggle_password_visibility
+        )
+        self.toggle_pass_btn.pack(side="left", padx=(4, 0))
 
         btn_frame = ttk.Frame(self)
-        btn_frame.grid(row=5, column=0, columnspan=2, pady=12)
+        btn_frame.grid(row=3, column=0, columnspan=2, pady=12)
 
         self.login_btn = ttk.Button(btn_frame, text="Đăng nhập", command=self.on_login)
         self.login_btn.pack(side="left", padx=6)
@@ -89,7 +86,17 @@ class AuthFrame(ttk.Frame):
 
         self.status_var = tk.StringVar(value="Nhập thông tin để đăng nhập hoặc đăng ký.")
         self.status_lbl = ttk.Label(self, textvariable=self.status_var, foreground="#333333", wraplength=380)
-        self.status_lbl.grid(row=6, column=0, columnspan=2, pady=8)
+        self.status_lbl.grid(row=4, column=0, columnspan=2, pady=8)
+
+    def toggle_password_visibility(self) -> None:
+        self._show_password = not self._show_password
+        self.pass_entry.configure(show="" if self._show_password else "*")
+        self.toggle_pass_btn.configure(text="Ẩn" if self._show_password else "Hiện")
+
+    def reset_password_visibility(self) -> None:
+        self._show_password = False
+        self.pass_entry.configure(show="*")
+        self.toggle_pass_btn.configure(text="Hiện")
 
     def set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
@@ -114,15 +121,10 @@ class AuthFrame(ttk.Frame):
             self.set_status(p_err, is_error=True)
             return None
 
-        try:
-            port = int(self.port_var.get().strip())
-        except ValueError:
-            self.set_status("Cổng máy chủ phải là số nguyên (1..65535)", is_error=True)
-            return None
-
-        host = self.host_var.get().strip() or "127.0.0.1"
+        host = self.app.default_host or "127.0.0.1"
+        port = self.app.default_port
         if not self.app.ensure_connected(host, port):
-            self.set_status(f"Không thể kết nối tới {host}:{port}", is_error=True)
+            self.set_status(f"Không thể kết nối tới máy chủ ({host}:{port})", is_error=True)
             return None
 
         return username, password
@@ -161,6 +163,7 @@ class AuthFrame(ttk.Frame):
             if resp.ok:
                 sid = resp.args[0] if resp.args else ""
                 self.pass_var.set("")
+                self.reset_password_visibility()
                 self.app.on_login_success(username, sid)
             else:
                 self.set_status(format_error_vi(resp.code, resp.args[0] if resp.args else ""), is_error=True)
@@ -251,8 +254,21 @@ class LobbyFrame(ttk.Frame):
         self.rtime_var = tk.StringVar(value="60")
         ttk.Spinbox(create_box, from_=30, to=180, increment=10, textvariable=self.rtime_var, width=8).grid(row=7, column=0, sticky="w", pady=(0, 12))
 
-        self.create_btn = ttk.Button(create_box, text="Tạo phòng", command=self.on_create_room)
-        self.create_btn.grid(row=8, column=0, sticky="ew")
+        self.create_btn = tk.Button(
+            create_box,
+            text="+ Tạo phòng mới",
+            command=self.on_create_room,
+            bg="#1E88E5",
+            fg="#FFFFFF",
+            activebackground="#1565C0",
+            activeforeground="#FFFFFF",
+            disabledforeground="#E0E0E0",
+            font=("sans-serif", 10, "bold"),
+            pady=6,
+            relief="raised",
+            cursor="hand2",
+        )
+        self.create_btn.grid(row=8, column=0, sticky="ew", pady=(4, 0))
 
         self.status_var = tk.StringVar(value="")
         self.status_lbl = ttk.Label(self, textvariable=self.status_var, foreground="#333333")
@@ -275,7 +291,6 @@ class LobbyFrame(ttk.Frame):
     def _update_pagination_buttons(self) -> None:
         self.prev_btn.configure(state="normal" if self.current_page > 1 else "disabled")
         self.next_btn.configure(state="normal" if self.current_page < self.total_pages else "disabled")
-        self.page_lbl.set if hasattr(self.page_lbl, "set") else None
         self.page_lbl.configure(
             text=f"Trang {self.current_page} / {self.total_pages} ({self.total_rooms} phòng)"
         )
