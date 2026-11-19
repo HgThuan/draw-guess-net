@@ -437,20 +437,26 @@ class RoomFrame(ttk.Frame):
         header = ttk.Frame(self)
         header.pack(fill="x", pady=(0, 6))
 
-        self.title_lbl = ttk.Label(header, text="", font=("sans-serif", 11, "bold"))
+        header_top = ttk.Frame(header)
+        header_top.pack(fill="x")
+
+        self.title_lbl = ttk.Label(header_top, text="", font=("sans-serif", 11, "bold"))
         self.title_lbl.pack(side="left")
 
-        self.leave_btn = ttk.Button(header, text="Rời phòng", command=self.on_leave_room)
+        self.clock_lbl = ttk.Label(header_top, text="", font=("sans-serif", 11, "bold"), foreground="#b00020")
+        self.clock_lbl.pack(side="right", padx=4)
+
+        header_actions = ttk.Frame(header)
+        header_actions.pack(fill="x", pady=(4, 0))
+
+        self.score_btn = ttk.Button(header_actions, text="Bảng điểm", command=self.on_request_scoreboard)
+        self.score_btn.pack(side="left", padx=(0, 4))
+
+        self.start_btn = ttk.Button(header_actions, text="Bắt đầu (START)", command=self.on_start_game)
+        self.start_btn.pack(side="left", padx=4)
+
+        self.leave_btn = ttk.Button(header_actions, text="Rời phòng", command=self.on_leave_room)
         self.leave_btn.pack(side="right")
-
-        self.start_btn = ttk.Button(header, text="Bắt đầu (START)", command=self.on_start_game)
-        self.start_btn.pack(side="right", padx=4)
-
-        self.score_btn = ttk.Button(header, text="Bảng điểm", command=self.on_request_scoreboard)
-        self.score_btn.pack(side="right", padx=4)
-
-        self.clock_lbl = ttk.Label(header, text="", font=("sans-serif", 11, "bold"), foreground="#b00020")
-        self.clock_lbl.pack(side="right", padx=8)
 
         # Banner for word hint / current word
         self.hint_var = tk.StringVar(value="")
@@ -615,12 +621,7 @@ class RoomFrame(ttk.Frame):
         )
 
     def _can_chat_now(self) -> bool:
-        m = self.app.room_model
-        if self.app.busy or not m.in_room:
-            return False
-        if m.state in ("CHOOSING_WORD", "DRAWING") and m.drawer == self.app.username:
-            return False
-        return True
+        return not self.app.busy and self.app.room_model.in_room
 
     def _active_viewport(self) -> Tuple[int, int, int, int]:
         """Return (offset_x, offset_y, vp_w, vp_h) preserving a fixed 4:3 aspect ratio."""
@@ -898,7 +899,7 @@ class RoomFrame(ttk.Frame):
         else:
             self.choose_bar.pack_forget()
 
-        # Final ranking banner (preserved after GAME_END + ROOM_INFO until dismissed or next GAME_START)
+        # Final ranking / live scoreboard banner
         if m.final_ranking:
             title_reason = (
                 "Ván kết thúc sớm vì không đủ người chơi"
@@ -907,6 +908,11 @@ class RoomFrame(ttk.Frame):
             )
             self.ranking_box.configure(text=title_reason)
             lines = [f"Hạng {idx + 1}: {u} — {sc} điểm" for idx, (u, sc) in enumerate(m.final_ranking)]
+            self.ranking_var.set("   |   ".join(lines))
+            self.ranking_box.pack(fill="x", pady=(0, 4), before=self.canvas.master.master)
+        elif m.show_scoreboard and m.scoreboard_ranking:
+            self.ranking_box.configure(text="Bảng điểm hiện tại")
+            lines = [f"Hạng {idx + 1}: {u} — {sc} điểm" for idx, (u, sc) in enumerate(m.scoreboard_ranking)]
             self.ranking_var.set("   |   ".join(lines))
             self.ranking_box.pack(fill="x", pady=(0, 4), before=self.canvas.master.master)
         else:

@@ -148,10 +148,11 @@ static void test_chat_drawer_blocked_and_answer_filter(void **state)
     Room *r = room_find(&s_srv, 1);
     clear_all(c, 3);
 
-    /* Drawer cannot chat while choosing; guessers still can */
+    /* Drawer can chat while choosing; guessers also can */
     dispatch_line(&s_srv, c[0], "CHAT|hello");
-    assert_non_null(strstr(c[0]->out, "ERR|302|"));
-    assert_int_equal(c[1]->out_len, 0);
+    assert_string_equal(c[0]->out, "OK\nCHAT|alice|hello\n");
+    assert_string_equal(c[1]->out, "CHAT|alice|hello\n");
+    assert_string_equal(c[2]->out, "CHAT|alice|hello\n");
     clear_all(c, 3);
     dispatch_line(&s_srv, c[1], "CHAT|good luck");
     assert_string_equal(c[2]->out, "CHAT|bob|good luck\n");
@@ -161,7 +162,20 @@ static void test_chat_drawer_blocked_and_answer_filter(void **state)
     dispatch_line(&s_srv, c[0], "CHOOSE_WORD|1");
     clear_all(c, 3);
 
+    /* Drawer can chat during DRAWING, cannot leak the answer, and cannot GUESS */
     dispatch_line(&s_srv, c[0], "CHAT|hello");
+    assert_string_equal(c[0]->out, "OK\nCHAT|alice|hello\n");
+    assert_string_equal(c[1]->out, "CHAT|alice|hello\n");
+    assert_string_equal(c[2]->out, "CHAT|alice|hello\n");
+    clear_all(c, 3);
+
+    dispatch_line(&s_srv, c[0], "CHAT|maybe a cat?");
+    assert_string_equal(c[0]->out, "ERR|306|chat blocked\n");
+    assert_int_equal(c[1]->out_len, 0);
+    assert_int_equal(c[2]->out_len, 0);
+    clear_all(c, 3);
+
+    dispatch_line(&s_srv, c[0], "GUESS|cat");
     assert_non_null(strstr(c[0]->out, "ERR|302|"));
     assert_int_equal(c[1]->out_len, 0);
     assert_int_equal(c[2]->out_len, 0);
