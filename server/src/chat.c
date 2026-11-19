@@ -32,19 +32,17 @@ void h_chat(struct Server *s, Conn *c, const Command *cmd)
     }
 
     const char *text = cmd->argv[0];
-    if (game_is_current_drawer(r, c->user)) {
-        reply_err(s, c, ERR_IS_DRAWER);
-        return;
-    }
-
     bool solved = false;
     if (r->state == ROOM_DRAWING) {
-        for (int i = 0; i < r->nplayers; i++) {
-            if (strcmp(r->players[i].name, c->user) == 0) {
-                solved = r->players[i].guessed;
-                break;
+        if (!game_is_current_drawer(r, c->user)) {
+            for (int i = 0; i < r->nplayers; i++) {
+                if (strcmp(r->players[i].name, c->user) == 0) {
+                    solved = r->players[i].guessed;
+                    break;
+                }
             }
         }
+        /* Both drawer and unguessed players are blocked from leaking the answer in chat. */
         if (!solved && words_contains(text, r->word)) {
             reply_err(s, c, ERR_CHAT_BLOCKED);
             return;

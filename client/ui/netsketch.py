@@ -47,7 +47,7 @@ COMMAND_ERRORS: Dict[str, Set[int]] = {
     "SCOREBOARD":  _COMMON_SYNTAX | {101, 204},
     "CHOOSE_WORD": _COMMON_SYNTAX | {101, 204, 300, 301, 304},
     "GUESS":       _COMMON_SYNTAX | {101, 204, 300, 302, 303},
-    "CHAT":        _COMMON_SYNTAX | {101, 204, 302, 306},
+    "CHAT":        _COMMON_SYNTAX | {101, 204, 306},
 }
 
 ERROR_MESSAGES: Dict[int, str] = {
@@ -230,6 +230,8 @@ class RoomModel:
 
     final_ranking: List[Tuple[str, int]] = field(default_factory=list)
     game_end_reason: str = ""
+    scoreboard_ranking: List[Tuple[str, int]] = field(default_factory=list)
+    show_scoreboard: bool = False
 
     def reset(self) -> None:
         self.in_room = False
@@ -256,10 +258,14 @@ class RoomModel:
         self.feed.clear()
         self.final_ranking.clear()
         self.game_end_reason = ""
+        self.scoreboard_ranking.clear()
+        self.show_scoreboard = False
 
     def dismiss_final_ranking(self) -> None:
         self.final_ranking.clear()
         self.game_end_reason = ""
+        self.scoreboard_ranking.clear()
+        self.show_scoreboard = False
 
     def _set_deadline(self, seconds: int) -> None:
         sec = max(0, int(seconds))
@@ -285,6 +291,8 @@ class RoomModel:
         """Apply OK|<u1:s1,u2:s2,...> response from SCOREBOARD as authoritative scores."""
         raw = args[0] if args else ""
         entries = parse_ranking_list(raw)
+        self.scoreboard_ranking = entries
+        self.show_scoreboard = True
         for user, sc in entries:
             self.scores[user] = sc
         return True
@@ -452,10 +460,7 @@ class RoomModel:
 
         if ev.name == "CHAT" and len(ev.args) >= 2:
             user, text = ev.args[0], ev.args[1]
-            is_private = (
-                self.state == "DRAWING"
-                and (user in self.guessed_users or user == self.drawer)
-            )
+            is_private = self.state == "DRAWING" and user in self.guessed_users
             if is_private:
                 self._append_feed("solved_chat", f"[Kênh đã đoán] {user}: {text}")
             else:

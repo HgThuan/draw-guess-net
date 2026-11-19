@@ -134,7 +134,17 @@ def test_it01_first_turn_strokes_guesses_and_chat(server_factory):
     assert alice.next_line() == "CHAT|carol|hello all"
     assert bob.next_line() == "CHAT|carol|hello all"
 
+    # Drawer can chat normally, is blocked from leaking the answer, and cannot guess
     alice.send("CHAT|hi")
+    assert alice.next_line() == "OK"
+    assert alice.next_line() == "CHAT|alice|hi"
+    assert bob.next_line() == "CHAT|alice|hi"
+    assert carol.next_line() == "CHAT|alice|hi"
+
+    alice.send(f"CHAT|hint {word}")
+    assert alice.next_line() == "ERR|306|chat blocked"
+
+    alice.send(f"GUESS|{word}")
     assert alice.next_line().startswith("ERR|302|")
 
 

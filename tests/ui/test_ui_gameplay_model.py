@@ -134,3 +134,23 @@ def test_async_error_policy_and_parsers():
         ("carol", 1215),
         ("alice", 1002),
     ]
+
+
+def test_scoreboard_banner_and_drawer_chat():
+    m = RoomModel(clock_fn=lambda: 100.0)
+    m.apply_event(Event("ROOM_INFO", ["1", "Phong Vui", "alice", "3", "2", "60", "DRAWING", "alice,bob"]))
+    m.drawer = "alice"
+
+    m.apply_scoreboard(["bob:250,alice:100"])
+    assert m.show_scoreboard is True
+    assert m.scoreboard_ranking == [("bob", 250), ("alice", 100)]
+    assert m.scores["bob"] == 250
+    assert m.scores["alice"] == 100
+
+    m.dismiss_final_ranking()
+    assert m.show_scoreboard is False
+    assert m.scoreboard_ranking == []
+
+    m.apply_event(Event("CHAT", ["alice", "chao moi nguoi"]))
+    assert m.feed[-1].kind == "chat"
+    assert "alice: chao moi nguoi" in m.feed[-1].text
