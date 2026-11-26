@@ -1,3 +1,4 @@
+import subprocess
 import time
 
 
@@ -34,3 +35,28 @@ def test_graceful_shutdown_sigterm(server):
     # Stop server while client sockets are still open
     rc = server.stop()
     assert rc == 0
+
+
+def test_startup_rejects_missing_or_short_words_file(request, tmp_path):
+    """Server fails fast with non-zero exit when --words is missing or has < 3 words."""
+    binary = request.config.getoption("--server")
+
+    missing = subprocess.run(
+        [binary, "--port", "19991", "--words", str(tmp_path / "does_not_exist.txt")],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert missing.returncode != 0
+    assert "words" in missing.stderr.lower()
+
+    short_words = tmp_path / "two_words.txt"
+    short_words.write_text("cat\ndog\n", encoding="utf-8")
+    short = subprocess.run(
+        [binary, "--port", "19992", "--words", str(short_words)],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert short.returncode != 0
+    assert "at least 3" in short.stderr.lower()

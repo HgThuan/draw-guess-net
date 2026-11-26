@@ -19,5 +19,12 @@ int main(int argc, char **argv)
     }
 
     server_init(&g_server, &cfg);
+    if (g_server.words.count < 3) {
+        fprintf(stderr,
+                "Error: need at least 3 valid words from '%s' (loaded %d)\n",
+                g_server.cfg.words_path ? g_server.cfg.words_path : "",
+                g_server.words.count);
+        return 1;
+    }
     return net_loop_run(&g_server);
 }

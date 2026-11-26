@@ -3,8 +3,14 @@
 
 int scoring_guess(int rank_k, int remaining_s, int draw_time_s)
 {
-    if (rank_k <= 0 || draw_time_s <= 0 || remaining_s < 0 || remaining_s > draw_time_s) {
+    if (rank_k <= 0 || draw_time_s <= 0) {
         return 0;
+    }
+
+    if (remaining_s < 0) {
+        remaining_s = 0;
+    } else if (remaining_s > draw_time_s) {
+        remaining_s = draw_time_s;
     }
 
     int64_t time_bonus = (400LL * (int64_t)remaining_s) / (int64_t)draw_time_s;
