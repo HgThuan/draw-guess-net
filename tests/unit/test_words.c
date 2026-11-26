@@ -31,16 +31,21 @@ static void test_words_load_dedup_crlf_and_overlong(void **state)
     fprintf(fp, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
     /* Overlong word > 31 chars but < 64 bytes */
     fprintf(fp, "abcdefghijklmnopqrstuvwxyz1234567890\n");
-    /* Line with control character */
+    /* Line with control character or disallowed characters (pipe, digit, punctuation) */
     fprintf(fp, "bad\x01word\n");
+    fprintf(fp, "dog|x\n");
+    fprintf(fp, "k9\n");
+    fprintf(fp, "hello!\n");
+    fprintf(fp, "  HOUSE  \r\n");
     fprintf(fp, "  ice   cream  \r\n");
     fprintf(fp, "tree\n");
     fclose(fp);
 
-    assert_int_equal(words_load(&s_wl, tmp_path), 3);
+    assert_int_equal(words_load(&s_wl, tmp_path), 4);
     assert_string_equal(s_wl.words[0], "cat");
-    assert_string_equal(s_wl.words[1], "ice cream");
-    assert_string_equal(s_wl.words[2], "tree");
+    assert_string_equal(s_wl.words[1], "house");
+    assert_string_equal(s_wl.words[2], "ice cream");
+    assert_string_equal(s_wl.words[3], "tree");
 
     (void)remove(tmp_path);
 }

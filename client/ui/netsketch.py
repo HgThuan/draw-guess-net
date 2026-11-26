@@ -47,8 +47,13 @@ COMMAND_ERRORS: Dict[str, Set[int]] = {
     "SCOREBOARD":  _COMMON_SYNTAX | {101, 204},
     "CHOOSE_WORD": _COMMON_SYNTAX | {101, 204, 300, 301, 304},
     "GUESS":       _COMMON_SYNTAX | {101, 204, 300, 302, 303},
-    "CHAT":        _COMMON_SYNTAX | {101, 204, 306},
+    "CHAT":        _COMMON_SYNTAX | {101, 204, 302, 306},
 }
+
+# Only no-reply commands (STROKE, CLEAR) can produce asynchronous errors while
+# another command is awaiting its reply; restrict async bypass to their codes
+# so an unexpected ERR code can never leave _pending (and UI busy) stuck forever.
+_ASYNC_ONLY_ERRORS: Set[int] = {300, 301, 305}
 
 ERROR_MESSAGES: Dict[int, str] = {
     -1:  "Mất kết nối tới máy chủ",
@@ -73,7 +78,7 @@ ERROR_MESSAGES: Dict[int, str] = {
     208: "Máy chủ đã đạt giới hạn số phòng",
     300: "Thao tác không hợp lệ ở giai đoạn hiện tại",
     301: "Chỉ người vẽ mới được thực hiện thao tác này",
-    302: "Người vẽ không được đoán hoặc chat trong lượt vẽ",
+    302: "Người vẽ không được đoán trong lượt vẽ",
     303: "Bạn đã đoán đúng trong lượt này rồi",
     304: "Lựa chọn từ khóa không hợp lệ",
     305: "Dữ liệu nét vẽ không hợp lệ",
@@ -1059,10 +1064,13 @@ class NetSketchClient:
             return
 
         if not resp.ok:
-            # If queue is empty OR the error code cannot belong to the head command
-            # (e.g., an async ERR|300/301/305 from STROKE/CLEAR arriving while another
-            # command is pending), route it to on_async_error without popping _pending.
-            if not self._pending or resp.code not in self._pending[0].valid_errors:
+            # If queue is empty OR the error is an async STROKE/CLEAR error (300/301/305)
+            # that cannot belong to the head command, route it to on_async_error without
+            # popping _pending. Any other error pops _pending so UI busy never deadlocks.
+            if not self._pending or (
+                resp.code in _ASYNC_ONLY_ERRORS
+                and resp.code not in self._pending[0].valid_errors
+            ):
                 if self.on_async_error is not None:
                     self._safe_call(self.on_async_error, resp)
                 return

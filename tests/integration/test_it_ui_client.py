@@ -98,6 +98,24 @@ def test_socketpair_classification_interleaved_stroke_err_and_utf8():
 
         gw_ev = [e for e in events if e.name == "GUESS_WRONG"][0]
         assert gw_ev.args == ["bob", "x|y"]
+
+        # 4. Backward-compatible ERR|302 on CHAT and any unknown non-async ERR code
+        #    must still resolve the head pending command so UI busy never deadlocks.
+        cli.send_cmd("CHAT|hi", lambda r: replies.append(("CHAT_302", r)))
+        peer.sendall(b"ERR|302|drawer cannot chat\n")
+        cli.poll_once()
+        assert replies[-1][0] == "CHAT_302"
+        assert replies[-1][1].ok is False
+        assert replies[-1][1].code == 302
+        assert cli.pending_count == 0
+
+        cli.send_cmd("CHAT|hi", lambda r: replies.append(("CHAT_999", r)))
+        peer.sendall(b"ERR|999|unexpected server error\n")
+        cli.poll_once()
+        assert replies[-1][0] == "CHAT_999"
+        assert replies[-1][1].ok is False
+        assert replies[-1][1].code == 999
+        assert cli.pending_count == 0
     finally:
         peer.close()
         cli.close()

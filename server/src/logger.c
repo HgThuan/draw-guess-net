@@ -115,7 +115,7 @@ void logger_log_proto(Logger *lg, int64_t now_ms, const char *sid, const char *l
         return;
     }
 
-    /* Mask password field in REGISTER|user|pass and LOGIN|user|pass */
+    /* Mask password in REGISTER/LOGIN and user text in CHAT/GUESS */
     if (strncmp(line, "REGISTER|", 9) == 0 || strncmp(line, "LOGIN|", 6) == 0) {
         const char *first_sep = strchr(line, '|');
         const char *second_sep = first_sep ? strchr(first_sep + 1, '|') : NULL;
@@ -127,6 +127,10 @@ void logger_log_proto(Logger *lg, int64_t now_ms, const char *sid, const char *l
                 out_line = masked;
             }
         }
+    } else if (strncmp(line, "CHAT|", 5) == 0) {
+        out_line = "CHAT|***";
+    } else if (strncmp(line, "GUESS|", 6) == 0) {
+        out_line = "GUESS|***";
     }
 
     logger_log(lg, LOG_DEBUG, now_ms, "sid=%s proto=%s",

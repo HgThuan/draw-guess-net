@@ -48,16 +48,22 @@ static void test_logger_masks_passwords_in_debug(void **state)
     logger_log_proto(&lg, 0, "abcd", "LOGIN|alice|TopSecretPass99");
     assert_int_equal(mem.len, 0);
 
-    /* At DEBUG level (--verbose), proto lines are logged with passwords masked */
+    /* At DEBUG level (--verbose), passwords, chat, and guess text are masked */
     logger_init_mem(&lg, &mem, LOG_DEBUG);
     logger_log_proto(&lg, 0, NULL, "REGISTER|alice|MySuperSecret123");
     logger_log_proto(&lg, 0, "deadbeef01234567", "LOGIN|bob|AnotherSecret456");
+    logger_log_proto(&lg, 0, "deadbeef01234567", "CHAT|private chat message");
+    logger_log_proto(&lg, 0, "deadbeef01234567", "GUESS|secretkeyword");
     logger_log_proto(&lg, 0, "deadbeef01234567", "PING");
 
     assert_null(strstr(mem.buf, "MySuperSecret123"));
     assert_null(strstr(mem.buf, "AnotherSecret456"));
+    assert_null(strstr(mem.buf, "private chat message"));
+    assert_null(strstr(mem.buf, "secretkeyword"));
     assert_non_null(strstr(mem.buf, "sid=- proto=REGISTER|alice|***\n"));
     assert_non_null(strstr(mem.buf, "sid=deadbeef01234567 proto=LOGIN|bob|***\n"));
+    assert_non_null(strstr(mem.buf, "sid=deadbeef01234567 proto=CHAT|***\n"));
+    assert_non_null(strstr(mem.buf, "sid=deadbeef01234567 proto=GUESS|***\n"));
     assert_non_null(strstr(mem.buf, "sid=deadbeef01234567 proto=PING\n"));
 }
 

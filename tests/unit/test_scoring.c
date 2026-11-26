@@ -22,11 +22,15 @@ static void test_scoring_guess_examples_and_bounds(void **state)
     /* Large valid values without 32-bit overflow */
     assert_int_equal(scoring_guess(1, 10000000, 10000000), 500);
 
-    /* Invalid inputs return 0 */
+    /* Out-of-range remaining_s is clamped into [0, draw_time_s] */
+    assert_int_equal(scoring_guess(1, -1, 60), 100);
+    assert_int_equal(scoring_guess(1, -5, 60), 100);
+    assert_int_equal(scoring_guess(1, 61, 60), 500);
+    assert_int_equal(scoring_guess(1, 70, 60), 500);
+
+    /* Invalid rank or draw_time returns 0 */
     assert_int_equal(scoring_guess(0, 30, 60), 0);
     assert_int_equal(scoring_guess(-1, 30, 60), 0);
-    assert_int_equal(scoring_guess(1, -1, 60), 0);
-    assert_int_equal(scoring_guess(1, 61, 60), 0);
     assert_int_equal(scoring_guess(1, 30, 0), 0);
     assert_int_equal(scoring_guess(1, 30, -60), 0);
 }
